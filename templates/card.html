@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Noto Sans TC', 'PingFang TC', sans-serif;
+    background: #f0f0f0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 40px;
+    padding: 40px 20px;
+  }
+
+  :root {
+    --orange: #E8722A;
+    --orange-light: #FFF3EB;
+    --orange-dark: #C45D1E;
+    --brown: #5C3D2E;
+    --dark: #1A1A1A;
+    --gray: #6B7280;
+    --gray-light: #F3F4F6;
+    --border: #E5E7EB;
+  }
+
+  .card {
+    width: 1080px;
+    height: 1350px;
+    background: #FFFFFF;
+    position: relative;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .top-bar {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 8px;
+    background: linear-gradient(90deg, var(--orange), var(--orange-dark));
+  }
+
+  .page-indicator {
+    position: absolute;
+    bottom: 48px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 10px;
+  }
+
+  .page-indicator .dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--border);
+  }
+
+  .page-indicator .dot.active {
+    background: var(--orange);
+    width: 28px;
+    border-radius: 5px;
+  }
+
+  .brand-footer {
+    position: absolute;
+    bottom: 88px;
+    left: 0; right: 0;
+    text-align: center;
+    font-size: 22px;
+    color: var(--gray);
+    font-weight: 400;
+    letter-spacing: 2px;
+  }
+
+  /* P1 - COVER */
+  .card-1 {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    padding: 80px 80px 140px;
+  }
+
+  .card-1 .source-tag {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--orange);
+    background: var(--orange-light);
+    padding: 10px 28px;
+    border-radius: 40px;
+    margin-bottom: 40px;
+    letter-spacing: 2px;
+  }
+
+  .card-1 .headline {
+    font-size: 68px;
+    font-weight: 900;
+    color: var(--dark);
+    line-height: 1.35;
+    margin-bottom: 36px;
+    max-width: 900px;
+  }
+
+  .card-1 .one-liner {
+    font-size: 30px;
+    color: var(--gray);
+    font-weight: 500;
+    margin-bottom: 50px;
+    max-width: 800px;
+    line-height: 1.6;
+  }
+
+  .card-1 .meta-row {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 40px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .card-1 .meta-tag {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--orange);
+    background: var(--orange-light);
+    padding: 10px 24px;
+    border-radius: 40px;
+  }
+
+  .card-1 .channel-info {
+    font-size: 26px;
+    color: var(--gray);
+    font-weight: 500;
+  }
+
+  .card-1 .channel-info strong {
+    color: var(--dark);
+    font-weight: 700;
+  }
+
+  /* P2 - 重點摘要 */
+  .card-2 {
+    padding: 80px 80px 140px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .card-2 .section-label {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--orange);
+    letter-spacing: 4px;
+    margin-top: 50px;
+    margin-bottom: 16px;
+  }
+
+  .card-2 .title {
+    font-size: 52px;
+    font-weight: 900;
+    color: var(--dark);
+    margin-bottom: 44px;
+    line-height: 1.3;
+  }
+
+  .card-2 .points {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    flex: 1;
+  }
+
+  .card-2 .point {
+    background: var(--orange-light);
+    border-left: 6px solid var(--orange);
+    border-radius: 0 16px 16px 0;
+    padding: 28px 32px;
+  }
+
+  .card-2 .point-label {
+    font-size: 26px;
+    font-weight: 800;
+    color: var(--orange);
+    margin-bottom: 6px;
+  }
+
+  .card-2 .point-content {
+    font-size: 28px;
+    color: #444;
+    line-height: 1.5;
+    font-weight: 500;
+  }
+
+  /* P3 - KEY QUOTE */
+  .card-3 {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    padding: 100px 80px 140px;
+    background: linear-gradient(180deg, #FFFFFF 0%, var(--orange-light) 100%);
+  }
+
+  .card-3 .quote-icon {
+    font-size: 120px;
+    color: var(--orange);
+    font-weight: 900;
+    line-height: 1;
+    margin-bottom: 20px;
+    opacity: 0.5;
+  }
+
+  .card-3 .quote-text {
+    font-size: 48px;
+    font-weight: 900;
+    color: var(--dark);
+    line-height: 1.6;
+    max-width: 850px;
+    margin-bottom: 50px;
+  }
+
+  .card-3 .quote-divider {
+    width: 80px; height: 4px;
+    background: var(--orange);
+    border-radius: 2px;
+    margin-bottom: 30px;
+  }
+
+  .card-3 .quote-source {
+    font-size: 26px;
+    color: var(--gray);
+    font-weight: 500;
+  }
+
+  .card-3 .quote-source strong {
+    color: var(--dark);
+    font-weight: 700;
+  }
+
+  /* P4 - 行動建議 */
+  .card-4 {
+    padding: 80px 80px 140px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .card-4 .section-label {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--orange);
+    letter-spacing: 4px;
+    margin-top: 50px;
+    margin-bottom: 16px;
+  }
+
+  .card-4 .title {
+    font-size: 52px;
+    font-weight: 900;
+    color: var(--dark);
+    margin-bottom: 50px;
+    line-height: 1.3;
+  }
+
+  .card-4 .actions {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    flex: 1;
+  }
+
+  .card-4 .action-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 24px;
+    background: var(--gray-light);
+    border-radius: 16px;
+    padding: 32px;
+  }
+
+  .card-4 .checkbox {
+    width: 36px; height: 36px;
+    border: 4px solid var(--orange);
+    border-radius: 8px;
+    flex-shrink: 0;
+    margin-top: 4px;
+  }
+
+  .card-4 .action-text {
+    font-size: 32px;
+    color: var(--dark);
+    font-weight: 700;
+    line-height: 1.4;
+  }
+
+  .card-4 .tags {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-top: auto;
+    padding-top: 30px;
+  }
+
+  .card-4 .tag {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--orange);
+    border: 3px solid var(--orange);
+    border-radius: 40px;
+    padding: 10px 24px;
+  }
+
+  /* P5 - CTA */
+  .card-5 {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    padding: 80px 80px 140px;
+    background: linear-gradient(180deg, #FFFFFF 0%, var(--orange-light) 100%);
+  }
+
+  .card-5 .video-label {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--orange);
+    letter-spacing: 4px;
+    margin-bottom: 30px;
+  }
+
+  .card-5 .video-title {
+    font-size: 40px;
+    font-weight: 900;
+    color: var(--dark);
+    line-height: 1.5;
+    max-width: 800px;
+    margin-bottom: 20px;
+  }
+
+  .card-5 .video-channel {
+    font-size: 28px;
+    color: var(--gray);
+    font-weight: 500;
+    margin-bottom: 50px;
+  }
+
+  .card-5 .divider {
+    width: 80px; height: 4px;
+    background: var(--orange);
+    border-radius: 2px;
+    margin-bottom: 50px;
+  }
+
+  .card-5 .cta-message {
+    font-size: 36px;
+    font-weight: 700;
+    color: var(--dark);
+    margin-bottom: 50px;
+    line-height: 1.6;
+  }
+
+  .card-5 .cta-message .key {
+    color: var(--orange);
+  }
+
+  .card-5 .author-block {
+    margin-top: auto;
+    padding-top: 40px;
+    border-top: 2px solid var(--border);
+    width: 100%;
+  }
+
+  .card-5 .author-block .name {
+    font-size: 34px;
+    font-weight: 900;
+    color: var(--dark);
+    margin-bottom: 8px;
+  }
+
+  .card-5 .author-block .role {
+    font-size: 24px;
+    color: var(--gray);
+    font-weight: 500;
+  }
+</style>
+</head>
+<body>
+
+<!-- P1: COVER -->
+<div class="card card-1" data-slide="1">
+  <div class="top-bar"></div>
+  <div class="source-tag">影片摘要</div>
+  <div class="headline">{{title_display}}</div>
+  <div class="one-liner">{{one_liner}}</div>
+  <div class="meta-row">
+    {{tags_html}}
+  </div>
+  <div class="channel-info"><strong>{{channel}}</strong> / {{duration}}</div>
+  <div class="page-indicator">
+    <div class="dot active"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div>
+  </div>
+</div>
+
+<!-- P2: 重點摘要 -->
+<div class="card card-2" data-slide="2">
+  <div class="top-bar"></div>
+  <div class="section-label">重點摘要</div>
+  <div class="title">核心重點</div>
+  <div class="points">
+    {{key_points_html}}
+  </div>
+  <div class="brand-footer">AI 摘要圖卡</div>
+  <div class="page-indicator">
+    <div class="dot"></div><div class="dot active"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div>
+  </div>
+</div>
+
+<!-- P3: KEY QUOTE -->
+<div class="card card-3" data-slide="3">
+  <div class="top-bar"></div>
+  <div class="quote-icon">"</div>
+  <div class="quote-text">{{key_quote}}</div>
+  <div class="quote-divider"></div>
+  <div class="quote-source">{{channel}}</div>
+  <div class="page-indicator">
+    <div class="dot"></div><div class="dot"></div><div class="dot active"></div><div class="dot"></div><div class="dot"></div>
+  </div>
+</div>
+
+<!-- P4: 行動建議 -->
+<div class="card card-4" data-slide="4">
+  <div class="top-bar"></div>
+  <div class="section-label">行動建議</div>
+  <div class="title">看完立刻行動</div>
+  <div class="actions">
+    {{action_items_html}}
+  </div>
+  <div class="tags">
+    {{tags_pill_html}}
+  </div>
+  <div class="page-indicator">
+    <div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot active"></div><div class="dot"></div>
+  </div>
+</div>
+
+<!-- P5: CTA -->
+<div class="card card-5" data-slide="5">
+  <div class="top-bar"></div>
+  <div class="video-label">原始影片</div>
+  <div class="video-title">{{video_title}}</div>
+  <div class="video-channel">{{channel}} / {{duration}}</div>
+  <div class="divider"></div>
+  <div class="cta-message">
+    覺得實用？<br>
+    <span class="key">收藏 + 分享</span>給需要的人
+  </div>
+  <div class="author-block">
+    <div class="name">AI 摘要圖卡</div>
+    <div class="role">YT 摘要圖卡產生器</div>
+  </div>
+  <div class="page-indicator">
+    <div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot active"></div>
+  </div>
+</div>
+
+</body>
+</html>
