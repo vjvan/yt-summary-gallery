@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=Inter:wght@400;500;700;900&display=swap');
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -17,21 +17,29 @@
     padding: 40px 20px;
   }
 
+  /* Theme tokens 由 render-card.ts 注入,等同於原本的 --orange / --orange-light 等 */
   :root {
-    --orange: #E8722A;
-    --orange-light: #FFF3EB;
-    --orange-dark: #C45D1E;
-    --brown: #5C3D2E;
+    {{theme_css}}
     --dark: #1A1A1A;
     --gray: #6B7280;
     --gray-light: #F3F4F6;
     --border: #E5E7EB;
   }
 
+  /* === 別名 (兼容舊 class 名,從 --orange 系改吃 --accent 系) === */
+  /* 這層別名讓我可以一次性換 theme,所有 card-1 ~ card-7 既有 CSS 不必改 */
+
+  /* 英文 highlight (cover / mindmap title 等強調字) */
+  .en-accent {
+    font-family: 'Inter', 'Noto Sans TC', sans-serif;
+    color: var(--accent);
+    font-weight: 800;
+  }
+
   .card {
     width: 1080px;
     height: 1350px;
-    background: #FFFFFF;
+    background: var(--card-bg, #FFFFFF);
     position: relative;
     overflow: hidden;
     flex-shrink: 0;
@@ -41,7 +49,7 @@
     position: absolute;
     top: 0; left: 0; right: 0;
     height: 8px;
-    background: linear-gradient(90deg, var(--orange), var(--orange-dark));
+    background: linear-gradient(90deg, var(--accent), var(--accent-dark));
   }
 
   .page-indicator {
@@ -60,7 +68,7 @@
   }
 
   .page-indicator .dot.active {
-    background: var(--orange);
+    background: var(--accent);
     width: 28px;
     border-radius: 5px;
   }
@@ -89,8 +97,8 @@
   .card-1 .source-tag {
     font-size: 24px;
     font-weight: 700;
-    color: var(--orange);
-    background: var(--orange-light);
+    color: var(--accent);
+    background: var(--accent-light);
     padding: 10px 28px;
     border-radius: 40px;
     margin-bottom: 40px;
@@ -127,8 +135,8 @@
   .card-1 .meta-tag {
     font-size: 24px;
     font-weight: 700;
-    color: var(--orange);
-    background: var(--orange-light);
+    color: var(--accent);
+    background: var(--accent-light);
     padding: 10px 24px;
     border-radius: 40px;
   }
@@ -154,7 +162,7 @@
   .card-2 .section-label {
     font-size: 24px;
     font-weight: 700;
-    color: var(--orange);
+    color: var(--accent);
     letter-spacing: 4px;
     margin-top: 50px;
     margin-bottom: 16px;
@@ -176,8 +184,8 @@
   }
 
   .card-2 .point {
-    background: var(--orange-light);
-    border-left: 6px solid var(--orange);
+    background: var(--accent-light);
+    border-left: 6px solid var(--accent);
     border-radius: 0 16px 16px 0;
     padding: 28px 32px;
   }
@@ -185,7 +193,7 @@
   .card-2 .point-label {
     font-size: 26px;
     font-weight: 800;
-    color: var(--orange);
+    color: var(--accent);
     margin-bottom: 6px;
   }
 
@@ -204,12 +212,12 @@
     align-items: center;
     text-align: center;
     padding: 100px 80px 140px;
-    background: linear-gradient(180deg, #FFFFFF 0%, var(--orange-light) 100%);
+    background: linear-gradient(180deg, #FFFFFF 0%, var(--accent-light) 100%);
   }
 
   .card-3 .quote-icon {
     font-size: 120px;
-    color: var(--orange);
+    color: var(--accent);
     font-weight: 900;
     line-height: 1;
     margin-bottom: 20px;
@@ -227,7 +235,7 @@
 
   .card-3 .quote-divider {
     width: 80px; height: 4px;
-    background: var(--orange);
+    background: var(--accent);
     border-radius: 2px;
     margin-bottom: 30px;
   }
@@ -253,7 +261,7 @@
   .card-4 .section-label {
     font-size: 24px;
     font-weight: 700;
-    color: var(--orange);
+    color: var(--accent);
     letter-spacing: 4px;
     margin-top: 50px;
     margin-bottom: 16px;
@@ -285,16 +293,28 @@
 
   .card-4 .checkbox {
     width: 36px; height: 36px;
-    border: 4px solid var(--orange);
+    border: 4px solid var(--accent);
     border-radius: 8px;
     flex-shrink: 0;
     margin-top: 4px;
   }
 
+  .card-4 .action-body {
+    flex: 1;
+  }
+
   .card-4 .action-text {
-    font-size: 32px;
+    font-size: 30px;
     color: var(--dark);
     font-weight: 700;
+    line-height: 1.4;
+  }
+
+  .card-4 .action-meta {
+    margin-top: 8px;
+    font-size: 20px;
+    color: var(--accent-dark);
+    font-weight: 600;
     line-height: 1.4;
   }
 
@@ -309,8 +329,8 @@
   .card-4 .tag {
     font-size: 24px;
     font-weight: 700;
-    color: var(--orange);
-    border: 3px solid var(--orange);
+    color: var(--accent);
+    border: 3px solid var(--accent);
     border-radius: 40px;
     padding: 10px 24px;
   }
@@ -323,13 +343,13 @@
     align-items: center;
     text-align: center;
     padding: 80px 80px 140px;
-    background: linear-gradient(180deg, #FFFFFF 0%, var(--orange-light) 100%);
+    background: linear-gradient(180deg, #FFFFFF 0%, var(--accent-light) 100%);
   }
 
   .card-5 .video-label {
     font-size: 24px;
     font-weight: 700;
-    color: var(--orange);
+    color: var(--accent);
     letter-spacing: 4px;
     margin-bottom: 30px;
   }
@@ -352,7 +372,7 @@
 
   .card-5 .divider {
     width: 80px; height: 4px;
-    background: var(--orange);
+    background: var(--accent);
     border-radius: 2px;
     margin-bottom: 50px;
   }
@@ -366,7 +386,7 @@
   }
 
   .card-5 .cta-message .key {
-    color: var(--orange);
+    color: var(--accent);
   }
 
   .card-5 .author-block {
@@ -388,12 +408,413 @@
     color: var(--gray);
     font-weight: 500;
   }
+
+  /* P6 - 流程鏈 (CSS Flowchart) */
+  .card-6 {
+    padding: 80px 80px 160px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .card-6 .section-label {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 4px;
+    margin-top: 40px;
+    margin-bottom: 16px;
+  }
+
+  .card-6 .title {
+    font-size: 52px;
+    font-weight: 900;
+    color: var(--dark);
+    margin-bottom: 40px;
+    line-height: 1.3;
+  }
+
+  .card-6 .flow-chain {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    flex: 1;
+  }
+
+  .card-6 .flow-step {
+    display: flex;
+    align-items: center;
+    gap: 22px;
+  }
+
+  .card-6 .step-number {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #FFFFFF;
+    font-size: 34px;
+    font-weight: 900;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    box-shadow: 0 6px 18px rgba(232, 114, 42, 0.25);
+  }
+
+  .card-6 .step-body {
+    flex: 1;
+    background: var(--accent-light);
+    border-radius: 14px;
+    padding: 18px 26px;
+    border-left: 5px solid var(--accent);
+  }
+
+  .card-6 .step-label {
+    font-size: 24px;
+    font-weight: 800;
+    color: var(--accent-dark);
+    margin-bottom: 4px;
+  }
+
+  .card-6 .step-content {
+    font-size: 22px;
+    color: #444;
+    line-height: 1.4;
+    font-weight: 500;
+  }
+
+  .card-6 .flow-arrow {
+    width: 3px;
+    height: 24px;
+    background: var(--accent);
+    margin: 4px 0 4px 36px;
+    opacity: 0.45;
+    border-radius: 2px;
+  }
+
+  /* P7 - 概念地圖 (Mermaid Mindmap) */
+  .card-7 {
+    padding: 80px 60px 160px;
+    display: flex;
+    flex-direction: column;
+    background: linear-gradient(180deg, #FFFFFF 0%, var(--accent-light) 100%);
+  }
+
+  .card-7 .section-label {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 4px;
+    margin-top: 40px;
+    margin-bottom: 16px;
+    text-align: center;
+  }
+
+  .card-7 .title {
+    font-size: 48px;
+    font-weight: 900;
+    color: var(--dark);
+    margin-bottom: 28px;
+    line-height: 1.3;
+    text-align: center;
+  }
+
+  .card-7 .mindmap-wrap {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  .card-7 .mermaid {
+    width: 100%;
+    max-width: 960px;
+    font-family: 'Noto Sans TC', sans-serif;
+    text-align: center;
+  }
+
+  .card-7 .mermaid svg {
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* === P TLDR - 60 秒看懂 (新, 段落式 TL;DR) === */
+  .card-tldr {
+    padding: 80px 90px 140px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .card-tldr .section-label {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 4px;
+    margin-top: 50px;
+    margin-bottom: 16px;
+  }
+
+  .card-tldr .title {
+    font-size: 52px;
+    font-weight: 900;
+    color: var(--dark);
+    margin-bottom: 50px;
+    line-height: 1.3;
+  }
+
+  .card-tldr .tldr-paragraph {
+    font-size: 32px;
+    line-height: 1.75;
+    color: #2A2A2A;
+    font-weight: 500;
+    margin-bottom: 60px;
+    letter-spacing: 0.5px;
+  }
+
+  .card-tldr .tldr-takeaway {
+    margin-top: auto;
+    background: var(--accent-light);
+    border-left: 8px solid var(--accent);
+    padding: 28px 36px;
+    border-radius: 0 16px 16px 0;
+  }
+
+  .card-tldr .takeaway-label {
+    display: block;
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--accent-dark);
+    letter-spacing: 3px;
+    margin-bottom: 8px;
+  }
+
+  .card-tldr .takeaway-text {
+    display: block;
+    font-size: 30px;
+    font-weight: 800;
+    color: var(--dark);
+    line-height: 1.4;
+  }
+
+  /* === P TIMELINE - 時間軸 (新) === */
+  .card-timeline {
+    padding: 80px 70px 140px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .card-timeline .section-label {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 4px;
+    margin-top: 40px;
+    margin-bottom: 16px;
+  }
+
+  .card-timeline .title {
+    font-size: 52px;
+    font-weight: 900;
+    color: var(--dark);
+    margin-bottom: 36px;
+    line-height: 1.3;
+  }
+
+  .card-timeline .timeline {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    position: relative;
+  }
+
+  .card-timeline .timeline-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 20px;
+    padding: 14px 18px;
+    border-radius: 12px;
+    background: #FFFFFF66;
+  }
+
+  .card-timeline .timeline-time {
+    font-family: 'Inter', 'Noto Sans TC', monospace;
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--accent);
+    flex-shrink: 0;
+    min-width: 100px;
+    padding-top: 2px;
+  }
+
+  .card-timeline .timeline-body {
+    flex: 1;
+  }
+
+  .card-timeline .timeline-label {
+    font-size: 24px;
+    font-weight: 800;
+    color: var(--dark);
+    margin-bottom: 4px;
+    line-height: 1.3;
+  }
+
+  .card-timeline .timeline-desc {
+    font-size: 20px;
+    color: #555;
+    line-height: 1.4;
+    font-weight: 500;
+  }
+
+  /* === P PITFALLS - 陷阱清單 (新, 反白底色強調避雷) === */
+  .card-pitfalls {
+    padding: 80px 80px 140px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .card-pitfalls .section-label {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--accent-dark);
+    letter-spacing: 4px;
+    margin-top: 50px;
+    margin-bottom: 16px;
+  }
+
+  .card-pitfalls .title {
+    font-size: 52px;
+    font-weight: 900;
+    color: var(--dark);
+    margin-bottom: 50px;
+    line-height: 1.3;
+  }
+
+  .card-pitfalls .pitfalls {
+    display: flex;
+    flex-direction: column;
+    gap: 26px;
+    flex: 1;
+  }
+
+  .card-pitfalls .pitfall {
+    background: #FFFFFF;
+    border: 3px solid var(--accent);
+    border-radius: 18px;
+    padding: 28px 32px;
+    position: relative;
+  }
+
+  .card-pitfalls .pitfall-icon {
+    position: absolute;
+    top: -16px;
+    left: 24px;
+    background: var(--accent);
+    color: #FFFFFF;
+    font-size: 22px;
+    font-weight: 900;
+    padding: 4px 14px;
+    border-radius: 8px;
+    letter-spacing: 1px;
+  }
+
+  .card-pitfalls .pitfall-warn {
+    font-size: 30px;
+    font-weight: 900;
+    color: var(--dark);
+    margin-top: 8px;
+    margin-bottom: 10px;
+    line-height: 1.35;
+  }
+
+  .card-pitfalls .pitfall-why {
+    font-size: 22px;
+    color: #555;
+    line-height: 1.5;
+    font-weight: 500;
+  }
+
+  /* === P RECALL - 自我測驗 (新, 鼓勵 active recall) === */
+  .card-recall {
+    padding: 80px 80px 140px;
+    display: flex;
+    flex-direction: column;
+    background: linear-gradient(180deg, var(--card-bg, #FFFFFF) 0%, var(--accent-light) 100%);
+  }
+
+  .card-recall .section-label {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 4px;
+    margin-top: 40px;
+    margin-bottom: 16px;
+  }
+
+  .card-recall .title {
+    font-size: 52px;
+    font-weight: 900;
+    color: var(--dark);
+    margin-bottom: 50px;
+    line-height: 1.3;
+  }
+
+  .card-recall .recall-questions {
+    display: flex;
+    flex-direction: column;
+    gap: 36px;
+    flex: 1;
+  }
+
+  .card-recall .recall-q {
+    display: flex;
+    align-items: flex-start;
+    gap: 20px;
+  }
+
+  .card-recall .recall-q-num {
+    width: 56px;
+    height: 56px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #FFFFFF;
+    font-size: 28px;
+    font-weight: 900;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .card-recall .recall-q-text {
+    flex: 1;
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--dark);
+    line-height: 1.5;
+    padding-top: 8px;
+  }
+
+  .card-recall .recall-hint {
+    margin-top: 30px;
+    text-align: center;
+    font-size: 20px;
+    color: var(--gray);
+    font-weight: 500;
+    font-style: italic;
+  }
+
 </style>
 </head>
 <body>
 
-<!-- P1: COVER -->
-<div class="card card-1" data-slide="1">
+<!-- 卡片 layout 是動態的: render-card.ts 的 pickLayout(genre, includeRecall) 決定哪幾張出現。
+     每張卡用 data-slide-id 語意命名,Playwright 依 layout 順序選取截圖。
+     page-indicator 由 render-card.ts 在 Playwright evaluate 動態注入 (依實際 layout 算 active 位置)。 -->
+
+<!-- 封面 -->
+<div class="card card-1" data-slide-id="cover">
   <div class="top-bar"></div>
   <div class="source-tag">影片摘要</div>
   <div class="headline">{{title_display}}</div>
@@ -402,72 +823,135 @@
     {{tags_html}}
   </div>
   <div class="channel-info"><strong>{{channel}}</strong> / {{duration}}</div>
-  <div class="page-indicator">
-    <div class="dot active"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div>
-  </div>
+  <div class="page-indicator"></div>
 </div>
 
-<!-- P2: 重點摘要 -->
-<div class="card card-2" data-slide="2">
+<!-- 60 秒 TL;DR (新) -->
+<div class="card card-tldr" data-slide-id="tldr">
   <div class="top-bar"></div>
-  <div class="section-label">重點摘要</div>
-  <div class="title">核心重點</div>
+  <div class="section-label">60 秒看懂</div>
+  <div class="title">不看影片也能掌握</div>
+  <div class="tldr-paragraph">{{tldr_paragraph}}</div>
+  <div class="tldr-takeaway">
+    <span class="takeaway-label">核心 takeaway</span>
+    <span class="takeaway-text">{{one_liner}}</span>
+  </div>
+  <div class="brand-footer">AI 摘要圖卡</div>
+  <div class="page-indicator"></div>
+</div>
+
+<!-- 重點解構 (原重點摘要) -->
+<div class="card card-2" data-slide-id="keypoints">
+  <div class="top-bar"></div>
+  <div class="section-label">重點解構</div>
+  <div class="title">影片骨架</div>
   <div class="points">
     {{key_points_html}}
   </div>
   <div class="brand-footer">AI 摘要圖卡</div>
-  <div class="page-indicator">
-    <div class="dot"></div><div class="dot active"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div>
-  </div>
+  <div class="page-indicator"></div>
 </div>
 
-<!-- P3: KEY QUOTE -->
-<div class="card card-3" data-slide="3">
+<!-- 時間軸 (新) -->
+<div class="card card-timeline" data-slide-id="timeline">
   <div class="top-bar"></div>
-  <div class="quote-icon">"</div>
-  <div class="quote-text">{{key_quote}}</div>
-  <div class="quote-divider"></div>
-  <div class="quote-source">{{channel}}</div>
-  <div class="page-indicator">
-    <div class="dot"></div><div class="dot"></div><div class="dot active"></div><div class="dot"></div><div class="dot"></div>
+  <div class="section-label">時間軸</div>
+  <div class="title">想跳到哪一段</div>
+  <div class="timeline">
+    {{timeline_html}}
   </div>
+  <div class="brand-footer">AI 摘要圖卡</div>
+  <div class="page-indicator"></div>
 </div>
 
-<!-- P4: 行動建議 -->
-<div class="card card-4" data-slide="4">
+<!-- 立即動手 (原行動建議,升級含 expected_outcome + time_estimate) -->
+<div class="card card-4" data-slide-id="actions">
   <div class="top-bar"></div>
-  <div class="section-label">行動建議</div>
-  <div class="title">看完立刻行動</div>
+  <div class="section-label">立即動手</div>
+  <div class="title">看完可以馬上做</div>
   <div class="actions">
     {{action_items_html}}
   </div>
   <div class="tags">
     {{tags_pill_html}}
   </div>
-  <div class="page-indicator">
-    <div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot active"></div><div class="dot"></div>
-  </div>
+  <div class="page-indicator"></div>
 </div>
 
-<!-- P5: CTA -->
-<div class="card card-5" data-slide="5">
+<!-- 陷阱清單 (新) -->
+<div class="card card-pitfalls" data-slide-id="pitfalls">
   <div class="top-bar"></div>
-  <div class="video-label">原始影片</div>
-  <div class="video-title">{{video_title}}</div>
-  <div class="video-channel">{{channel}} / {{duration}}</div>
-  <div class="divider"></div>
-  <div class="cta-message">
-    覺得實用？<br>
-    <span class="key">收藏 + 分享</span>給需要的人
+  <div class="section-label">小心踩雷</div>
+  <div class="title">這幾個坑要避開</div>
+  <div class="pitfalls">
+    {{pitfalls_html}}
   </div>
-  <div class="author-block">
-    <div class="name">AI 摘要圖卡</div>
-    <div class="role">YT 摘要圖卡產生器</div>
-  </div>
-  <div class="page-indicator">
-    <div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot active"></div>
-  </div>
+  <div class="brand-footer">AI 摘要圖卡</div>
+  <div class="page-indicator"></div>
 </div>
+
+<!-- 一句記住 (原 KEY QUOTE) -->
+<div class="card card-3" data-slide-id="quote">
+  <div class="top-bar"></div>
+  <div class="quote-icon">"</div>
+  <div class="quote-text">{{key_quote}}</div>
+  <div class="quote-divider"></div>
+  <div class="quote-source">{{channel}}</div>
+  <div class="page-indicator"></div>
+</div>
+
+<!-- 概念地圖 (原 P7 Mermaid) -->
+<div class="card card-7" data-slide-id="mindmap">
+  <div class="top-bar"></div>
+  <div class="section-label">概念地圖</div>
+  <div class="title">一張圖看完核心</div>
+  <div class="mindmap-wrap">
+    <pre class="mermaid">
+{{mermaid_graph}}
+    </pre>
+  </div>
+  <div class="page-indicator"></div>
+</div>
+
+<!-- 自我測驗 (新, 只有 includeRecall=true 才會出現在 layout) -->
+<div class="card card-recall" data-slide-id="recall">
+  <div class="top-bar"></div>
+  <div class="section-label">自我測驗</div>
+  <div class="title">檢查你真的懂了嗎</div>
+  <div class="recall-questions">
+    {{recall_questions_html}}
+  </div>
+  <div class="recall-hint">
+    試著用自己的話回答,卡住就回頭看影片那段
+  </div>
+  <div class="page-indicator"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    securityLevel: 'loose',
+    theme: 'base',
+    themeVariables: {
+      fontFamily: "'Noto Sans TC', sans-serif",
+      fontSize: '22px',
+      primaryColor: '{{accent_light_hex}}',
+      primaryTextColor: '#1A1A1A',
+      primaryBorderColor: '{{accent_hex}}',
+      lineColor: '{{accent_hex}}',
+      tertiaryColor: '#FFFFFF',
+      mainBkg: '{{accent_light_hex}}',
+      nodeBorder: '{{accent_hex}}',
+      clusterBkg: '#FFFFFF',
+      clusterBorder: '{{accent_hex}}'
+    },
+    mindmap: {
+      padding: 20,
+      maxNodeWidth: 360
+    }
+  });
+</script>
 
 </body>
 </html>

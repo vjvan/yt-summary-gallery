@@ -1,38 +1,73 @@
-const SYSTEM_PROMPT = `你是一個影片內容分析專家。根據以下附帶時間戳的影片逐字稿，產出結構化的繁體中文摘要。
+/**
+ * 從影片逐字稿萃取結構化摘要 (給 carousel 9 種卡片用)。
+ *
+ * v2 設計原則: 卡片要對應「使用者完成的事」,所以 summary 結構也要分三層:
+ *  - 獲取層 (encoding): tldr_paragraph / key_points / highlights
+ *  - 實作層 (transfer): action_items (升級含 expected_outcome + time_estimate) / pitfalls
+ *  - 記憶層 (retention): key_quote / recall_questions
+ *
+ * 加 video_genre 是為了智能布局: 不同類型影片走不同卡組 preset,避免每張影片強塞 9 卡。
+ *
+ * augmentSummary 給舊資料 lazy upgrade 用: 只算缺的新欄位,不重跑既有 key_points / highlights 等,省 GPT cost。
+ *
+ * Layer 2 護城河: prompt 從外部檔案載入 (prompts/*.txt 已 gitignore),env var 指路徑,
+ * 找不到就 fallback 到 baked demo 版 (功能可用但缺核心對齊邏輯,給 self-host 學員看的版本)。
+ * 詳見 references/sops/yt-tool-moat-architecture.md Layer 2。
+ *
+ * Layer 4 護城河: PROMPT_VERSION 寫進每筆 summary,給未來 A/B test 跟版本溯源用。
+ * 改 prompt 時必加 patch number,讓模仿者永遠落後一個版本。
+ */
 
-輸出必須是嚴格的 JSON 格式:
+import fs from "fs";
+import path from "path";
 
-{
-  "title_display": "精簡的卡片標題 (最多15個中文字，抓住核心主題)",
-  "one_liner": "一句話總結這部影片在講什麼 (20字以內)",
-  "key_points": [
-    {
-      "label": "重點標籤 (2-4個字)",
-      "content": "具體說明 (20-40字)"
+export const PROMPT_VERSION = "v2.0";
+
+/**
+ * 從外部檔案載入 prompt,失敗 fallback 到 demo 版。
+ * 完整 production prompt 放 prompts/*.txt (gitignored),只有訂閱者拿得到。
+ */
+function loadPromptOrFallback(envVar: string, defaultPath: string, fallback: string): string {
+  const customPath = process.env[envVar];
+  const resolvedPath = customPath
+    ? path.resolve(customPath)
+    : path.join(process.cwd(), defaultPath);
+  try {
+    if (fs.existsSync(resolvedPath)) {
+      return fs.readFileSync(resolvedPath, "utf-8");
     }
-  ],
-  "key_quote": "影片中最有力或最有啟發性的一句話",
-  "action_items": ["可執行的行動建議1", "行動建議2"],
-  "tags": ["標籤1", "標籤2", "標籤3"],
-  "highlights": [
-    {
-      "timestamp": 125,
-      "label": "精華段落標題 (5-10字)",
-      "description": "這段在講什麼 (15-30字)"
-    }
-  ]
+  } catch {
+    /* fallthrough to fallback */
+  }
+  return fallback;
 }
 
-規則:
-- 所有內容必須是繁體中文
-- key_points 提供 3 到 5 個重點，content 要具體，不要泛泛而談
-- key_quote 選最有啟發性或爭議性的那句，如果原文是英文要翻譯成中文
-- action_items 提供 1 到 3 個觀眾看完可以立刻做的事
-- tags 提供 3 到 5 個分類標籤
-- highlights 提供 5 到 8 個精華片段，timestamp 是該段落開始的秒數 (整數)，從逐字稿的時間戳判斷
-- highlights 按時間順序排列，涵蓋影片從頭到尾的重要段落
-- 逐字稿可能有錯字或語音辨識錯誤，請根據上下文修正理解
-- 不要使用表情符號`;
+// === Demo 版 prompt (50% 能力,給 self-host 學員 / 公開 repo 用) ===
+// 完整 production 版在 prompts/extract-system.txt (gitignored)
+const SYSTEM_PROMPT_DEMO = `你是一個影片內容摘要工具。讀逐字稿產出結構化 JSON 繁體中文摘要。
+
+輸出格式:
+{
+  "title_display": "卡片標題 15字內",
+  "one_liner": "一句話總結 20字內",
+  "tldr_paragraph": "段落式 TL;DR 80-120字",
+  "key_points": [{"label":"標籤","content":"說明"}],
+  "key_quote": "金句",
+  "action_items": [{"action":"動作","expected_outcome":"結果","time_estimate":"時間"}],
+  "pitfalls": [{"warn":"警示","why":"原因"}],
+  "recall_questions": ["問句"],
+  "tags": ["標籤"],
+  "highlights": [{"timestamp":125,"label":"標題","description":"說明"}],
+  "video_genre": "tutorial | opinion | interview | news | review | other"
+}
+
+規則:繁體中文,不用 emoji,key_points 3-5 個,action_items / pitfalls 各 1-3 個,recall_questions 2-3 個,highlights 5-8 個按時間順序。`;
+
+const SYSTEM_PROMPT = loadPromptOrFallback(
+  "OPENAI_EXTRACT_PROMPT_PATH",
+  "prompts/extract-system.txt",
+  SYSTEM_PROMPT_DEMO
+);
 
 export interface Highlight {
   timestamp: number;
@@ -40,14 +75,81 @@ export interface Highlight {
   description: string;
 }
 
+export interface Pitfall {
+  warn: string;
+  why: string;
+}
+
+export interface ActionItem {
+  action: string;
+  expected_outcome: string;
+  time_estimate: string;
+}
+
+export type VideoGenre =
+  | "tutorial"
+  | "opinion"
+  | "interview"
+  | "news"
+  | "review"
+  | "other";
+
 export interface Summary {
   title_display: string;
   one_liner: string;
+  tldr_paragraph: string;
   key_points: { label: string; content: string }[];
   key_quote: string;
-  action_items: string[];
+  action_items: ActionItem[];
+  pitfalls: Pitfall[];
+  recall_questions: string[];
   tags: string[];
   highlights: Highlight[];
+  video_genre: VideoGenre;
+  prompt_version?: string;
+}
+
+/**
+ * 確保 summary 有所有新欄位 (給舊資料反序列化用)。
+ * 缺什麼補什麼空值,不會清掉既有資料。
+ */
+export function ensureSummaryShape(raw: Partial<Summary>): Summary {
+  return {
+    title_display: raw.title_display || "",
+    one_liner: raw.one_liner || "",
+    tldr_paragraph: raw.tldr_paragraph || "",
+    key_points: raw.key_points || [],
+    key_quote: raw.key_quote || "",
+    action_items: normalizeActionItems(raw.action_items),
+    pitfalls: raw.pitfalls || [],
+    recall_questions: raw.recall_questions || [],
+    tags: raw.tags || [],
+    highlights: raw.highlights || [],
+    video_genre: (raw.video_genre as VideoGenre) || "other",
+    prompt_version: raw.prompt_version, // 不 default 成 PROMPT_VERSION,保留 null 以便辨識「未經 augment 的舊資料」
+  };
+}
+
+/**
+ * 舊版 action_items 是 string[],新版是 ActionItem[]。
+ * 反序列化時自動轉換,不破壞舊資料。
+ */
+function normalizeActionItems(raw: unknown): ActionItem[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item) => {
+    if (typeof item === "string") {
+      return { action: item, expected_outcome: "", time_estimate: "" };
+    }
+    if (item && typeof item === "object") {
+      const obj = item as Record<string, unknown>;
+      return {
+        action: String(obj.action || ""),
+        expected_outcome: String(obj.expected_outcome || ""),
+        time_estimate: String(obj.time_estimate || ""),
+      };
+    }
+    return { action: "", expected_outcome: "", time_estimate: "" };
+  });
 }
 
 export async function extractSummary(
@@ -79,7 +181,7 @@ export async function extractSummary(
       ],
       response_format: { type: "json_object" },
       temperature: 0.3,
-      max_tokens: 3000,
+      max_tokens: 4000,
     }),
   });
 
@@ -92,8 +194,202 @@ export async function extractSummary(
   const content = data.choices[0]?.message?.content;
   if (!content) throw new Error("Empty response from OpenAI");
 
-  const summary: Summary = JSON.parse(content);
-  if (!summary.highlights) summary.highlights = [];
+  const raw = JSON.parse(content) as Partial<Summary>;
+  return ensureSummaryShape({ ...raw, prompt_version: PROMPT_VERSION });
+}
 
-  return summary;
+/**
+ * Lazy upgrade: 給只有舊欄位的 summary 補新 4 欄位 (tldr_paragraph / pitfalls / recall_questions / video_genre)。
+ *
+ * 不重新計算既有的 title_display / key_points / highlights 等,只請 GPT 回傳缺的部分,
+ * 用較小的 max_tokens (省 cost) + 較短的 prompt (省 input cost)。
+ *
+ * 跟 SYSTEM_PROMPT 一樣走 prompt 外部檔載入 + demo fallback。
+ */
+const AUGMENT_PROMPT_DEMO = `你是一個影片內容摘要工具。已有讀者的影片摘要,請補充缺的欄位 (tldr_paragraph / pitfalls / recall_questions / video_genre),並把舊 action_items 升級成 v2 結構。
+
+輸出 JSON:
+{
+  "tldr_paragraph": "段落 80-120字",
+  "pitfalls": [{"warn":"...","why":"..."}],
+  "recall_questions": ["..."],
+  "video_genre": "tutorial | opinion | interview | news | review | other",
+  "action_items_v2": [{"action":"...","expected_outcome":"...","time_estimate":"..."}]
+}
+
+規則: 繁體中文,不用 emoji。`;
+
+const AUGMENT_PROMPT = loadPromptOrFallback(
+  "OPENAI_AUGMENT_PROMPT_PATH",
+  "prompts/augment-system.txt",
+  AUGMENT_PROMPT_DEMO
+);
+
+export async function augmentSummary(
+  oldSummary: Summary,
+  transcriptWithTimestamps: string,
+  videoTitle: string,
+  channel: string
+): Promise<Summary> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY not set");
+
+  let text = transcriptWithTimestamps;
+  if (text.length > 60000) {
+    text = text.slice(0, 28000) + "\n\n[...中間省略...]\n\n" + text.slice(-28000);
+  }
+
+  const existingSummary = JSON.stringify(
+    {
+      title_display: oldSummary.title_display,
+      one_liner: oldSummary.one_liner,
+      key_points: oldSummary.key_points,
+      key_quote: oldSummary.key_quote,
+      action_items_old: oldSummary.action_items,
+      tags: oldSummary.tags,
+    },
+    null,
+    2
+  );
+
+  const userMsg = `影片標題: ${videoTitle}\n頻道: ${channel}\n\n既有摘要 (供參考,不需重產):\n${existingSummary}\n\n逐字稿 (含時間戳):\n${text}`;
+
+  const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: AUGMENT_PROMPT },
+        { role: "user", content: userMsg },
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.3,
+      max_tokens: 2000,
+    }),
+  });
+
+  if (!resp.ok) {
+    const err = await resp.text();
+    throw new Error(`OpenAI API error (augment): ${err.slice(0, 200)}`);
+  }
+
+  const data = await resp.json();
+  const content = data.choices[0]?.message?.content;
+  if (!content) throw new Error("Empty response from OpenAI augment");
+
+  const augmented = JSON.parse(content) as {
+    tldr_paragraph?: string;
+    pitfalls?: Pitfall[];
+    recall_questions?: string[];
+    video_genre?: VideoGenre;
+    action_items_v2?: ActionItem[];
+  };
+
+  return ensureSummaryShape({
+    ...oldSummary,
+    tldr_paragraph: augmented.tldr_paragraph || oldSummary.tldr_paragraph,
+    pitfalls: augmented.pitfalls || oldSummary.pitfalls,
+    recall_questions: augmented.recall_questions || oldSummary.recall_questions,
+    video_genre: augmented.video_genre || oldSummary.video_genre,
+    action_items: augmented.action_items_v2?.length
+      ? augmented.action_items_v2
+      : normalizeActionItems(oldSummary.action_items),
+    prompt_version: PROMPT_VERSION,
+  });
+}
+
+/**
+ * 偵測 highlights 是否異常 (時間戳全集中在影片開頭 / 沒按時間順序)。
+ * 通常是當初 GPT extract 時誤判 transcript 時間戳單位。
+ */
+export function highlightsLookBroken(
+  highlights: Highlight[],
+  durationSec: number
+): boolean {
+  if (!highlights || highlights.length < 3) return true;
+  if (durationSec < 300) return false; // 短片不檢查
+  const maxTs = Math.max(...highlights.map((h) => h.timestamp || 0));
+  // 影片 > 5 分鐘但 highlights 最大時間戳不到 30% → 視為爛
+  return maxTs < durationSec * 0.3;
+}
+
+/**
+ * 強制重產 highlights (給「時間戳似乎不準確」的 lazy fix 用)。
+ * 不動其他欄位,只重新呼叫 GPT 拿合理 timestamp 的 highlights。
+ */
+const REGEN_HIGHLIGHTS_PROMPT = `你是影片內容萃取專家。請根據附帶時間戳的逐字稿,產出 5 到 8 個精華片段 (highlights),時間戳必須:
+1. 是該段落起始的「秒數」(integer)
+2. 涵蓋影片從頭到尾 (不能全集中在前 1 分鐘)
+3. 按時間順序升序排列
+
+輸出嚴格 JSON:
+{
+  "highlights": [
+    { "timestamp": 125, "label": "標題 5-10字", "description": "描述 15-30字" }
+  ]
+}
+
+規則:繁體中文,不用 emoji,專有名詞保留原文。注意逐字稿的時間戳格式 [m:ss],要正確轉成秒數 (例如 [12:30] = 750 秒)。`;
+
+export async function regenerateHighlights(
+  transcriptWithTimestamps: string,
+  videoTitle: string,
+  channel: string,
+  durationSec: number
+): Promise<Highlight[]> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY not set");
+
+  let text = transcriptWithTimestamps;
+  if (text.length > 60000) {
+    text = text.slice(0, 28000) + "\n\n[...中間省略...]\n\n" + text.slice(-28000);
+  }
+
+  const userMsg = `影片標題: ${videoTitle}\n頻道: ${channel}\n影片總長: ${durationSec} 秒\n\n逐字稿 (含時間戳):\n${text}`;
+
+  const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: REGEN_HIGHLIGHTS_PROMPT },
+        { role: "user", content: userMsg },
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.2,
+      max_tokens: 1500,
+    }),
+  });
+
+  if (!resp.ok) {
+    const err = await resp.text();
+    throw new Error(`OpenAI API error (regen highlights): ${err.slice(0, 200)}`);
+  }
+
+  const data = await resp.json();
+  const content = data.choices[0]?.message?.content;
+  if (!content) throw new Error("Empty response from OpenAI regen highlights");
+
+  const parsed = JSON.parse(content) as { highlights?: Highlight[] };
+  // 過掉:不是數字 / 負值 / 超出影片長度 (容忍 5 秒 buffer)
+  const upperBound = durationSec > 0 ? durationSec + 5 : Infinity;
+  const list = (parsed.highlights || [])
+    .filter(
+      (h) =>
+        Number.isFinite(h.timestamp) &&
+        h.timestamp >= 0 &&
+        h.timestamp <= upperBound &&
+        typeof h.label === "string" &&
+        typeof h.description === "string"
+    )
+    .sort((a, b) => a.timestamp - b.timestamp);
+  return list;
 }

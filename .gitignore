@@ -47,3 +47,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Premium GPT prompts (Layer 2 護城河:不進 git)
+prompts/*.txt
+
