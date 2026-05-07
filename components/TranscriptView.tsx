@@ -42,6 +42,9 @@ export default function TranscriptView({
   const [tab, setTab] = useState<"highlights" | "full">("highlights");
   const [lang, setLang] = useState<"zh" | "original">(isTranslated ? "zh" : "original");
   const [currentTime, setCurrentTime] = useState(0);
+  const [subMode, setSubMode] = useState<"bilingual" | "original" | "translated" | "off">(
+    isTranslated ? "bilingual" : "original"
+  );
   const [isPlaying, setIsPlaying] = useState(false);
   const playerRef = useRef<HTMLIFrameElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -191,14 +194,70 @@ export default function TranscriptView({
       {/* === PLAYER (YouTube or Podcast audio) === */}
       <div className="w-full mb-6">
         {source === "youtube" ? (
-          <div className="aspect-video rounded-2xl overflow-hidden shadow-xl">
-            <iframe
-              ref={playerRef}
-              src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&origin=${typeof window !== "undefined" ? window.location.origin : ""}`}
-              className="w-full h-full"
-              allowFullScreen
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            />
+          <div>
+            <div className="relative aspect-video rounded-2xl overflow-hidden shadow-xl">
+              <iframe
+                ref={playerRef}
+                src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&cc_load_policy=0&iv_load_policy=3&modestbranding=1&rel=0&origin=${typeof window !== "undefined" ? window.location.origin : ""}`}
+                className="w-full h-full"
+                allowFullScreen
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              />
+              {/* 字幕 overlay (點擊重播當前句) */}
+              {subMode !== "off" && activeIndex >= 0 && (
+                <div className="pointer-events-none absolute inset-x-0 bottom-16 px-4 z-10 flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => seekTo(originalSegments[activeIndex]?.start ?? 0)}
+                    className="pointer-events-auto max-w-3xl w-full bg-black/75 text-white rounded-md px-5 py-3 backdrop-blur-sm text-center hover:bg-black/85 transition-colors cursor-pointer"
+                    title="點擊重播這一句"
+                  >
+                    {(subMode === "bilingual" || subMode === "translated") && isTranslated && segmentsZh?.[activeIndex] && (
+                      <div className="text-lg sm:text-xl font-bold leading-snug">
+                        {segmentsZh[activeIndex].text}
+                      </div>
+                    )}
+                    {(subMode === "bilingual" || subMode === "original") && originalSegments[activeIndex] && (
+                      <div className={`text-sm sm:text-base text-gray-200 leading-snug ${
+                        subMode === "bilingual" && isTranslated && segmentsZh?.[activeIndex] ? "mt-1" : ""
+                      }`}>
+                        {originalSegments[activeIndex].text}
+                      </div>
+                    )}
+                  </button>
+                </div>
+              )}
+            </div>
+            {/* 字幕模式 picker */}
+            <div className="mt-3 flex items-center justify-end gap-3">
+              <span className="text-xs text-gray-400">字幕 overlay</span>
+              <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+                {(isTranslated
+                  ? [
+                      { value: "bilingual" as const, label: "雙語" },
+                      { value: "original" as const, label: "原文" },
+                      { value: "translated" as const, label: "中譯" },
+                      { value: "off" as const, label: "關" },
+                    ]
+                  : [
+                      { value: "original" as const, label: "字幕" },
+                      { value: "off" as const, label: "關" },
+                    ]
+                ).map((m) => (
+                  <button
+                    key={m.value}
+                    onClick={() => setSubMode(m.value)}
+                    className={`px-3 py-1.5 rounded-md text-xs font-bold transition-colors ${
+                      subMode === m.value
+                        ? "bg-white text-orange-600 shadow-sm"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         ) : (
           <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-2xl shadow-xl p-8">
@@ -398,16 +457,30 @@ export default function TranscriptView({
                   </div>
                 )}
 
-                {(summary.action_items as string[])?.length > 0 && (
+                {(summary.action_items as Array<unknown>)?.length > 0 && (
                   <div>
-                    <h3 className="text-xs font-bold text-orange-500 uppercase tracking-widest mb-2">行動建議</h3>
+                    <h3 className="text-xs font-bold text-orange-500 uppercase tracking-widest mb-2">立即動手</h3>
                     <div className="space-y-1.5">
-                      {(summary.action_items as string[]).map((item, i) => (
-                        <div key={i} className="flex items-start gap-2">
-                          <div className="w-4 h-4 mt-0.5 border-2 border-orange-400 rounded flex-shrink-0" />
-                          <p className="text-gray-700 text-sm">{item}</p>
-                        </div>
-                      ))}
+                      {(summary.action_items as Array<unknown>).map((raw, i) => {
+                        const item =
+                          typeof raw === "string"
+                            ? { action: raw, expected_outcome: "", time_estimate: "" }
+                            : (raw as { action?: string; expected_outcome?: string; time_estimate?: string });
+                        const meta: string[] = [];
+                        if (item.time_estimate) meta.push(`⏱ ${item.time_estimate}`);
+                        if (item.expected_outcome) meta.push(`→ ${item.expected_outcome}`);
+                        return (
+                          <div key={i} className="flex items-start gap-2">
+                            <div className="w-4 h-4 mt-0.5 border-2 border-orange-400 rounded flex-shrink-0" />
+                            <div>
+                              <p className="text-gray-700 text-sm">{item.action || ""}</p>
+                              {meta.length > 0 && (
+                                <p className="text-[10px] text-gray-500 mt-0.5">{meta.join("　·　")}</p>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
