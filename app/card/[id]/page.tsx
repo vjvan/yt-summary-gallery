@@ -5,6 +5,10 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import TranscriptView from "@/components/TranscriptView";
+import YouTubePlayerWithOverlay from "@/components/YouTubePlayerWithOverlay";
+import InteractiveTimeline from "@/components/InteractiveTimeline";
+import AnnotationsPanel from "@/components/AnnotationsPanel";
+import { useLocalStorage } from "@/lib/use-local-storage";
 
 export default function CardDetailPage() {
   const params = useParams();
@@ -14,7 +18,19 @@ export default function CardDetailPage() {
   const [view, setView] = useState<"carousel" | "transcript">("carousel");
   const [loading, setLoading] = useState(true);
   const [initialSeekSec, setInitialSeekSec] = useState<number | null>(null);
+  const [regenerating, setRegenerating] = useState(false);
+  const [cardsVersion, setCardsVersion] = useState(0);
+  const [downloadingVideo, setDownloadingVideo] = useState(false);
+  const [themes, setThemes] = useState<Array<{ id: string; label: string; cardBg: string; accent: string; accentLight: string; accentDark: string }>>([]);
+  const [themePickerOpen, setThemePickerOpen] = useState(false);
+  const [includeRecall, setIncludeRecall] = useLocalStorage<boolean>("yt_include_recall", false);
+  const [featuredSaving, setFeaturedSaving] = useState(false);
+  const [regeneratingHighlights, setRegeneratingHighlights] = useState(false);
+  const [playerCurrentTime, setPlayerCurrentTime] = useState(0);
+  const playerSeekRef = useRef<((s: number) => void) | null>(null);
   const burnPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const regenPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const dlVideoPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // 讀 URL hash 拿 #t=153&seg=24
   useEffect(() => {
@@ -35,6 +51,13 @@ export default function CardDetailPage() {
     refresh().finally(() => setLoading(false));
   }, [refresh]);
 
+  useEffect(() => {
+    fetch("/api/themes")
+      .then((r) => r.json())
+      .then((d) => setThemes(d.themes || []))
+      .catch(() => { /* ignore */ });
+  }, []);
+
   // burn_status=burning 時開 polling
   useEffect(() => {
     const burnStatus = (data?.burn_status as string | null) || null;
@@ -54,6 +77,19 @@ export default function CardDetailPage() {
       }
     };
   }, [data, refresh]);
+
+  useEffect(() => {
+    return () => {
+      if (regenPollRef.current) {
+        clearInterval(regenPollRef.current);
+        regenPollRef.current = null;
+      }
+      if (dlVideoPollRef.current) {
+        clearInterval(dlVideoPollRef.current);
+        dlVideoPollRef.current = null;
+      }
+    };
+  }, []);
 
   if (loading) {
     return (
@@ -124,6 +160,105 @@ export default function CardDetailPage() {
     setTimeout(() => clearInterval(poll), 600000);
   }
 
+  async function handleRegenerateHighlights() {
+    if (regeneratingHighlights) return;
+    if (!confirm("讓 GPT 重新讀逐字稿產正確的時間軸 (約 10-20 秒)。完成後會刷新頁面。")) return;
+    setRegeneratingHighlights(true);
+    try {
+      const r = await fetch(`/api/summaries/${id}/regenerate-highlights`, { method: "POST" });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        alert(`重產失敗:${err.error || r.statusText}`);
+      } else {
+        await refresh();
+      }
+    } finally {
+      setRegeneratingHighlights(false);
+    }
+  }
+
+  async function handleToggleFeatured() {
+    if (featuredSaving) return;
+    const currentlyFeatured = !!data?.is_featured;
+    let note: string | null = null;
+    if (!currentlyFeatured) {
+      const input = prompt("加進「允雷推薦影片庫」公開頁。輸入推薦理由 (300字內,公開可見):", "");
+      if (input === null) return; // 取消
+      note = (input || "").trim();
+    } else {
+      if (!confirm("從推薦頁移除這支影片?")) return;
+    }
+    setFeaturedSaving(true);
+    try {
+      await fetch(`/api/summaries/${id}/featured`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          is_featured: !currentlyFeatured,
+          featured_note: note || "",
+        }),
+      });
+      await refresh();
+    } finally {
+      setFeaturedSaving(false);
+    }
+  }
+
+  async function handleDownloadVideo() {
+    if (downloadingVideo) return;
+    if (!confirm("會用 yt-dlp 下載這支 YouTube 影片成 mp4 到本機,給原生 player 使用(PiP / 字幕雙語切換 / 播放速度)。1080p 約 300-500MB,完成後磁碟用量請手動管理。")) return;
+    setDownloadingVideo(true);
+    await fetch(`/api/summaries/${id}/download-video`, { method: "POST" });
+    if (dlVideoPollRef.current) clearInterval(dlVideoPollRef.current);
+    const startedAt = Date.now();
+    dlVideoPollRef.current = setInterval(async () => {
+      const d = await refresh();
+      const elapsed = Date.now() - startedAt;
+      if (d?.video_url || elapsed > 600000) {
+        if (dlVideoPollRef.current) {
+          clearInterval(dlVideoPollRef.current);
+          dlVideoPollRef.current = null;
+        }
+        setDownloadingVideo(false);
+      }
+    }, 4000);
+  }
+
+  async function handleRegenerateCards(themeId?: string) {
+    if (regenerating) return;
+    const themeMsg = themeId ? `用「${themes.find((t) => t.id === themeId)?.label || themeId}」配色` : "用目前配色";
+    const recallMsg = includeRecall ? " + 自我測驗卡" : "";
+    if (!confirm(`${themeMsg}${recallMsg}重畫圖卡 (智能 layout 依影片類型決定張數,首次升級可能 60-90 秒因為要先 GPT 補欄位)。已下載的舊圖卡不受影響。`)) return;
+    setRegenerating(true);
+    setThemePickerOpen(false);
+    const startCount = Number(data?.slide_count || 0);
+    const params = new URLSearchParams();
+    if (themeId) params.set("theme", themeId);
+    if (includeRecall) params.set("include_recall", "true");
+    const qs = params.toString();
+    const url = qs
+      ? `/api/summaries/${id}/regenerate-cards?${qs}`
+      : `/api/summaries/${id}/regenerate-cards`;
+    await fetch(url, { method: "POST" });
+    // Poll slide_count 變動或最多等 90s
+    if (regenPollRef.current) clearInterval(regenPollRef.current);
+    const startedAt = Date.now();
+    regenPollRef.current = setInterval(async () => {
+      const d = await refresh();
+      const newCount = Number(d?.slide_count || 0);
+      const elapsed = Date.now() - startedAt;
+      if (newCount !== startCount || elapsed > 180000) {
+        if (regenPollRef.current) {
+          clearInterval(regenPollRef.current);
+          regenPollRef.current = null;
+        }
+        setRegenerating(false);
+        setCardsVersion((v) => v + 1);
+        if (newCount > 0 && currentSlide >= newCount) setCurrentSlide(0);
+      }
+    }, 3000);
+  }
+
   return (
     <main className="min-h-screen bg-gray-50">
       <div className={view === "transcript" ? "max-w-[1600px] mx-auto px-6 py-6" : "max-w-7xl mx-auto px-4 py-8"}>
@@ -136,28 +271,97 @@ export default function CardDetailPage() {
             &larr; 回到 Gallery
           </Link>
 
-          {/* View toggle */}
-          <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
-            <button
-              onClick={() => setView("carousel")}
-              className={`px-4 py-2 rounded-md text-sm font-bold transition-colors ${
-                view === "carousel"
-                  ? "bg-white text-orange-600 shadow-sm"
-                  : "text-gray-500 hover:text-gray-700"
-              }`}
-            >
-              圖卡 Carousel
-            </button>
-            <button
-              onClick={() => setView("transcript")}
-              className={`px-4 py-2 rounded-md text-sm font-bold transition-colors ${
-                view === "transcript"
-                  ? "bg-white text-orange-600 shadow-sm"
-                  : "text-gray-500 hover:text-gray-700"
-              }`}
-            >
-              逐字稿同步
-            </button>
+          <div className="flex items-center gap-3">
+            {view === "carousel" && (
+              <>
+                <button
+                  onClick={handleToggleFeatured}
+                  disabled={featuredSaving}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-bold border transition-colors disabled:opacity-50 ${
+                    data?.is_featured
+                      ? "border-orange-400 bg-orange-50 text-orange-700"
+                      : "border-gray-200 text-gray-600 hover:bg-gray-50"
+                  }`}
+                  title={data?.is_featured ? "已在推薦頁,點擊移除" : "加進公開的「允雷推薦影片庫」/featured"}
+                >
+                  <span>{data?.is_featured ? "★ 已推薦" : "☆ 推薦"}</span>
+                </button>
+                <label
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-bold border border-gray-200 text-gray-600 hover:bg-gray-50 cursor-pointer"
+                  title="開啟後重畫圖卡時會多一張「自我測驗」卡 (active recall)。預設關以避免 IG 發佈場景的卡片過多"
+                >
+                  <input
+                    type="checkbox"
+                    checked={includeRecall}
+                    onChange={(e) => setIncludeRecall(e.target.checked)}
+                    className="accent-orange-500"
+                  />
+                  <span>自我測驗卡</span>
+                </label>
+                <div className="relative">
+                  <button
+                    onClick={() => setThemePickerOpen((v) => !v)}
+                    disabled={regenerating}
+                    className="px-3 py-2 rounded-md text-sm font-bold transition-colors border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    title="換配色 (5 套主題,影片自動分配或手動指定)"
+                  >
+                    換配色
+                    <span className="text-xs">▾</span>
+                  </button>
+                  {themePickerOpen && themes.length > 0 && (
+                    <div className="absolute top-full right-0 mt-1 z-30 bg-white rounded-lg shadow-xl border border-gray-200 p-2 min-w-[200px]">
+                      {themes.map((t) => (
+                        <button
+                          key={t.id}
+                          onClick={() => handleRegenerateCards(t.id)}
+                          className="w-full flex items-center gap-3 px-2 py-2 rounded-md text-sm hover:bg-gray-50 text-left"
+                        >
+                          <span className="flex gap-1 flex-shrink-0">
+                            <span className="w-4 h-4 rounded-sm border border-gray-200" style={{ background: t.cardBg }} />
+                            <span className="w-4 h-4 rounded-sm" style={{ background: t.accent }} />
+                            <span className="w-4 h-4 rounded-sm" style={{ background: t.accentLight }} />
+                          </span>
+                          <span className="font-bold text-gray-700">{t.label}</span>
+                          <span className="text-xs text-gray-400 ml-auto">{t.id}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <button
+                  onClick={() => handleRegenerateCards()}
+                  disabled={regenerating}
+                  className="px-3 py-2 rounded-md text-sm font-bold transition-colors border border-orange-200 text-orange-600 hover:bg-orange-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="用目前配色重畫 7 張圖卡(含流程鏈 + 概念地圖)"
+                >
+                  {regenerating ? "重畫中..." : "重新生成圖卡"}
+                </button>
+              </>
+            )}
+
+            {/* View toggle */}
+            <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+              <button
+                onClick={() => setView("carousel")}
+                className={`px-4 py-2 rounded-md text-sm font-bold transition-colors ${
+                  view === "carousel"
+                    ? "bg-white text-orange-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                圖卡 Carousel
+              </button>
+              <button
+                onClick={() => setView("transcript")}
+                className={`px-4 py-2 rounded-md text-sm font-bold transition-colors ${
+                  view === "transcript"
+                    ? "bg-white text-orange-600 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                逐字稿同步
+              </button>
+            </div>
           </div>
         </div>
 
@@ -185,14 +389,23 @@ export default function CardDetailPage() {
             <div>
               {cardPaths.length > 0 && (
                 <>
-                  <div className="rounded-xl overflow-hidden shadow-lg bg-white">
+                  <div className="rounded-xl overflow-hidden shadow-lg bg-white relative">
                     <Image
-                      src={cardPaths[currentSlide]}
+                      src={cardsVersion > 0 ? `${cardPaths[currentSlide]}?v=${cardsVersion}` : cardPaths[currentSlide]}
                       alt={`Slide ${currentSlide + 1}`}
                       width={1080}
                       height={1350}
                       className="w-full h-auto"
+                      unoptimized
                     />
+                    {regenerating && (
+                      <div className="absolute inset-0 bg-white/70 flex items-center justify-center backdrop-blur-sm">
+                        <div className="text-center">
+                          <div className="text-orange-500 font-bold text-lg mb-1">圖卡重畫中</div>
+                          <div className="text-gray-500 text-sm">套用最新模板(7 張),約 30 秒</div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center justify-between mt-4">
                     <button
@@ -247,29 +460,135 @@ export default function CardDetailPage() {
 
             <div>
               {source === "youtube" ? (
-                <div className="aspect-video rounded-xl overflow-hidden mb-6">
-                  <iframe
-                    src={`https://www.youtube.com/embed/${data.video_id}`}
-                    className="w-full h-full"
-                    allowFullScreen
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                  />
-                </div>
+                videoUrl ? (
+                  // C 路徑: 已下載 mp4 → 走原生 HTML5 video,有 PiP / 字幕雙語切換 / 速度等原生 UI
+                  <div>
+                    <VideoPlayerPanel
+                      videoUrl={videoUrl}
+                      burnedVideoUrl={burnedVideoUrl}
+                      srtEnPath={srtEnPath}
+                      srtZhPath={srtZhPath}
+                      srtBiPath={srtBiPath}
+                      isTranslated={isTranslated}
+                      burnStatus={burnStatus}
+                      burnError={burnError}
+                      fallbackRatio={fallbackRatio}
+                      initialSeekSec={initialSeekSec}
+                      onBurn={handleBurn}
+                      onRetranslate={handleRetranslate}
+                      onTimeUpdate={(t) => setPlayerCurrentTime(t)}
+                      onPlayerReady={(api) => { playerSeekRef.current = api.seekTo; }}
+                    />
+                    {highlights.length > 0 && (
+                      <div className="mt-4">
+                        <InteractiveTimeline
+                          highlights={highlights.map((h) => ({
+                            timestamp: h.timestamp,
+                            label: h.label,
+                            description: h.description,
+                          }))}
+                          onSeek={(s) => playerSeekRef.current?.(s)}
+                          currentTime={playerCurrentTime}
+                          durationSec={Number(data?.duration) || 0}
+                          onRequestRegenerate={handleRegenerateHighlights}
+                        />
+                      </div>
+                    )}
+                    <div className="mt-4">
+                      <AnnotationsPanel
+                        videoId={data.video_id as string}
+                        currentTime={playerCurrentTime}
+                        onSeek={(s) => playerSeekRef.current?.(s)}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  // A 路徑: iframe + 自製字幕 overlay,零本機磁碟
+                  <div className="mb-6">
+                    <YouTubePlayerWithOverlay
+                      videoId={data.video_id as string}
+                      segments={segments}
+                      segmentsZh={segmentsZh}
+                      isTranslated={isTranslated}
+                      initialSeekSec={initialSeekSec}
+                      onTimeUpdate={(t) => setPlayerCurrentTime(t)}
+                      onPlayerReady={(api) => { playerSeekRef.current = api.seekTo; }}
+                    />
+                    <div className="mt-3">
+                      <button
+                        onClick={handleDownloadVideo}
+                        disabled={downloadingVideo}
+                        className="w-full py-2.5 text-sm font-bold text-orange-600 border-2 border-dashed border-orange-300 rounded-lg hover:bg-orange-50 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                        title="下載成 mp4 後可用瀏覽器原生 PiP / 字幕選單 / 速度控制(約 300-500MB,需數十秒到數分鐘)"
+                      >
+                        {downloadingVideo ? "下載中(yt-dlp 抓 mp4)..." : "升級成原生 player(下載 mp4 約 300-500MB)"}
+                      </button>
+                    </div>
+                    {highlights.length > 0 && (
+                      <div className="mt-4">
+                        <InteractiveTimeline
+                          highlights={highlights.map((h) => ({
+                            timestamp: h.timestamp,
+                            label: h.label,
+                            description: h.description,
+                          }))}
+                          onSeek={(s) => playerSeekRef.current?.(s)}
+                          currentTime={playerCurrentTime}
+                          durationSec={Number(data?.duration) || 0}
+                          onRequestRegenerate={handleRegenerateHighlights}
+                        />
+                      </div>
+                    )}
+                    <div className="mt-4">
+                      <AnnotationsPanel
+                        videoId={data.video_id as string}
+                        currentTime={playerCurrentTime}
+                        onSeek={(s) => playerSeekRef.current?.(s)}
+                      />
+                    </div>
+                  </div>
+                )
               ) : isVideo ? (
-                <VideoPlayerPanel
-                  videoUrl={videoUrl}
-                  burnedVideoUrl={burnedVideoUrl}
-                  srtEnPath={srtEnPath}
-                  srtZhPath={srtZhPath}
-                  srtBiPath={srtBiPath}
-                  isTranslated={isTranslated}
-                  burnStatus={burnStatus}
-                  burnError={burnError}
-                  fallbackRatio={fallbackRatio}
-                  initialSeekSec={initialSeekSec}
-                  onBurn={handleBurn}
-                  onRetranslate={handleRetranslate}
-                />
+                <div>
+                  <VideoPlayerPanel
+                    videoUrl={videoUrl}
+                    burnedVideoUrl={burnedVideoUrl}
+                    srtEnPath={srtEnPath}
+                    srtZhPath={srtZhPath}
+                    srtBiPath={srtBiPath}
+                    isTranslated={isTranslated}
+                    burnStatus={burnStatus}
+                    burnError={burnError}
+                    fallbackRatio={fallbackRatio}
+                    initialSeekSec={initialSeekSec}
+                    onBurn={handleBurn}
+                    onRetranslate={handleRetranslate}
+                    onTimeUpdate={(t) => setPlayerCurrentTime(t)}
+                    onPlayerReady={(api) => { playerSeekRef.current = api.seekTo; }}
+                  />
+                  {highlights.length > 0 && (
+                    <div className="mt-4">
+                      <InteractiveTimeline
+                        highlights={highlights.map((h) => ({
+                          timestamp: h.timestamp,
+                          label: h.label,
+                          description: h.description,
+                        }))}
+                        onSeek={(s) => playerSeekRef.current?.(s)}
+                        currentTime={playerCurrentTime}
+                        durationSec={Number(data?.duration) || 0}
+                        onRequestRegenerate={handleRegenerateHighlights}
+                      />
+                    </div>
+                  )}
+                  <div className="mt-4">
+                    <AnnotationsPanel
+                      videoId={data.video_id as string}
+                      currentTime={playerCurrentTime}
+                      onSeek={(s) => playerSeekRef.current?.(s)}
+                    />
+                  </div>
+                </div>
               ) : (
                 <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-xl p-6 mb-6">
                   <p className="text-purple-600 font-bold text-lg mb-3 text-center">Podcast 音訊</p>
@@ -293,6 +612,35 @@ export default function CardDetailPage() {
                 </div>
               )}
               <SummaryPanel summary={summary} />
+              {/* Layer 6 護城河:跨 tool 導流 (整合 stack 整套體驗 lock-in) */}
+              <div className="mt-6 bg-white rounded-xl border border-gray-200 p-4">
+                <h3 className="text-sm font-bold text-gray-700 tracking-wider uppercase mb-3">
+                  把這支拿去做別的事
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <Link
+                    href={`/remix?source=${encodeURIComponent(data.video_id as string)}`}
+                    className="flex flex-col gap-1 px-3 py-2.5 rounded-lg border border-gray-200 hover:border-orange-300 hover:bg-orange-50 transition-colors text-left"
+                  >
+                    <span className="text-sm font-bold text-gray-800">→ 短影片混剪</span>
+                    <span className="text-xs text-gray-500">挑 highlights 自動產短片</span>
+                  </Link>
+                  <Link
+                    href={`/clean?source=${encodeURIComponent(data.video_id as string)}`}
+                    className="flex flex-col gap-1 px-3 py-2.5 rounded-lg border border-gray-200 hover:border-orange-300 hover:bg-orange-50 transition-colors text-left"
+                  >
+                    <span className="text-sm font-bold text-gray-800">→ 口播自動剪接</span>
+                    <span className="text-xs text-gray-500">剪掉停頓和靜音</span>
+                  </Link>
+                  <Link
+                    href={`/search?q=${encodeURIComponent(((summary?.tags as string[])?.[0] || (summary?.one_liner as string) || "").slice(0, 30))}`}
+                    className="flex flex-col gap-1 px-3 py-2.5 rounded-lg border border-gray-200 hover:border-orange-300 hover:bg-orange-50 transition-colors text-left"
+                  >
+                    <span className="text-sm font-bold text-gray-800">→ 找其他相關影片</span>
+                    <span className="text-xs text-gray-500">跨影片庫搜尋這個主題</span>
+                  </Link>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -332,6 +680,8 @@ function VideoPlayerPanel({
   initialSeekSec,
   onBurn,
   onRetranslate,
+  onTimeUpdate,
+  onPlayerReady,
 }: {
   videoUrl: string | null;
   burnedVideoUrl: string | null;
@@ -345,6 +695,8 @@ function VideoPlayerPanel({
   initialSeekSec: number | null;
   onBurn: (hwaccel: boolean) => void;
   onRetranslate: () => void;
+  onTimeUpdate?: (t: number) => void;
+  onPlayerReady?: (api: { seekTo: (t: number) => void }) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -365,6 +717,20 @@ function VideoPlayerPanel({
       return () => v.removeEventListener("loadedmetadata", seek);
     }
   }, [initialSeekSec]);
+
+  // 暴露 seekTo + currentTime 給父層做 annotation / interactive timeline
+  useEffect(() => {
+    onPlayerReady?.({
+      seekTo: (s: number) => {
+        const v = videoRef.current;
+        if (!v) return;
+        try {
+          v.currentTime = s;
+          v.play().catch(() => { /* ignore autoplay block */ });
+        } catch { /* ignore */ }
+      },
+    });
+  }, [onPlayerReady]);
   const playSrc = burnedVideoUrl || videoUrl || "";
   const showSoftSubs = !burnedVideoUrl; // 已燒就不掛 track,避免雙重字幕
   const vttBi = srtBiPath ? srtToVttUrl(srtBiPath) : null;
@@ -381,7 +747,14 @@ function VideoPlayerPanel({
   return (
     <div className="mb-6">
       <div className="rounded-xl overflow-hidden bg-black mb-3">
-        <video ref={videoRef} src={playSrc} controls crossOrigin="anonymous" className="w-full h-auto">
+        <video
+          ref={videoRef}
+          src={playSrc}
+          controls
+          crossOrigin="anonymous"
+          className="w-full h-auto"
+          onTimeUpdate={(e) => onTimeUpdate?.(e.currentTarget.currentTime)}
+        >
           {showSoftSubs && vttBi && (
             <track src={vttBi} kind="subtitles" srcLang="zh" label="雙語" default />
           )}
@@ -517,18 +890,33 @@ function SummaryPanel({ summary }: { summary: Record<string, unknown> | null }) 
         </div>
       )}
 
-      {(summary.action_items as string[])?.length > 0 && (
+      {(summary.action_items as Array<unknown>)?.length > 0 && (
         <div>
           <h2 className="text-sm font-bold text-orange-500 uppercase tracking-widest mb-3">
-            行動建議
+            立即動手
           </h2>
           <div className="space-y-2">
-            {(summary.action_items as string[]).map((item, i) => (
-              <div key={i} className="flex items-start gap-3">
-                <div className="w-5 h-5 mt-0.5 border-2 border-orange-400 rounded flex-shrink-0" />
-                <p className="text-gray-700">{item}</p>
-              </div>
-            ))}
+            {(summary.action_items as Array<unknown>).map((raw, i) => {
+              // 兼容兩種 shape: 舊版 string / 新版 {action, expected_outcome, time_estimate}
+              const item =
+                typeof raw === "string"
+                  ? { action: raw, expected_outcome: "", time_estimate: "" }
+                  : (raw as { action?: string; expected_outcome?: string; time_estimate?: string });
+              const meta: string[] = [];
+              if (item.time_estimate) meta.push(`⏱ ${item.time_estimate}`);
+              if (item.expected_outcome) meta.push(`→ ${item.expected_outcome}`);
+              return (
+                <div key={i} className="flex items-start gap-3">
+                  <div className="w-5 h-5 mt-0.5 border-2 border-orange-400 rounded flex-shrink-0" />
+                  <div>
+                    <p className="text-gray-700">{item.action || ""}</p>
+                    {meta.length > 0 && (
+                      <p className="text-xs text-gray-500 mt-0.5">{meta.join("　·　")}</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
