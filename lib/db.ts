@@ -104,8 +104,30 @@ export function getDb() {
         updated_at TEXT DEFAULT (datetime('now'))
       )
     `);
+
+    // Layer 3 護城河: 個人筆記 (annotations) — 累積在這個工具裡的個人化 lock-in 資料
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS annotations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        video_id TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        body TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_annotations_video ON annotations(video_id, timestamp)`);
   }
   return db;
+}
+
+export interface AnnotationRow {
+  id: number;
+  video_id: string;
+  timestamp: number;
+  body: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface SummaryRow {
