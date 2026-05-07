@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import GenerateForm from "@/components/GenerateForm";
 import CardGrid from "@/components/CardGrid";
@@ -45,8 +46,36 @@ export default function Home() {
           </p>
         </div>
 
-        <div className="mb-12">
+        <div className="mb-8">
           <GenerateForm onGenerated={fetchItems} />
+        </div>
+
+        {/* Layer 6 護城河:三大工作流入口卡 (整套 stack 體驗,單一 feature 易抄整套難抄) */}
+        <div className="mb-12 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <Link
+            href="/"
+            className="bg-orange-50 border-2 border-orange-200 rounded-xl p-4 hover:border-orange-400 transition-colors"
+          >
+            <div className="text-xs font-bold text-orange-600 mb-1 tracking-wider">圖卡萃取</div>
+            <div className="text-sm font-bold text-gray-800 mb-1">影片 → 9 種學習卡</div>
+            <div className="text-xs text-gray-500 leading-snug">獲取 / 實作 / 記憶 三層覆蓋</div>
+          </Link>
+          <Link
+            href="/remix"
+            className="bg-white border-2 border-gray-200 rounded-xl p-4 hover:border-orange-300 hover:bg-orange-50 transition-colors"
+          >
+            <div className="text-xs font-bold text-gray-600 mb-1 tracking-wider">短影片混剪</div>
+            <div className="text-sm font-bold text-gray-800 mb-1">挑 highlights 自動產短片</div>
+            <div className="text-xs text-gray-500 leading-snug">為 IG / Threads / YT Shorts 用</div>
+          </Link>
+          <Link
+            href="/clean"
+            className="bg-white border-2 border-gray-200 rounded-xl p-4 hover:border-orange-300 hover:bg-orange-50 transition-colors"
+          >
+            <div className="text-xs font-bold text-gray-600 mb-1 tracking-wider">口播自動剪接</div>
+            <div className="text-sm font-bold text-gray-800 mb-1">剪掉停頓 + 燒字幕</div>
+            <div className="text-xs text-gray-500 leading-snug">給自己的口播影片用</div>
+          </Link>
         </div>
 
         {loading ? (
