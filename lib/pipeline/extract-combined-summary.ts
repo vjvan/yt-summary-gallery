@@ -1,4 +1,4 @@
-import type { Summary } from "./extract-summary";
+import { ensureSummaryShape, type Summary } from "./extract-summary";
 
 export interface VideoScriptSegment {
   clip_index: number;
@@ -168,7 +168,7 @@ export async function extractCombinedSummary(
 
   const parsed = JSON.parse(content);
 
-  const summary: Summary = {
+  const summary: Summary = ensureSummaryShape({
     title_display: parsed.title_display,
     one_liner: parsed.one_liner,
     key_points: parsed.key_points || [],
@@ -176,7 +176,7 @@ export async function extractCombinedSummary(
     action_items: parsed.action_items || [],
     tags: parsed.tags || [],
     highlights: parsed.highlights || [],
-  };
+  });
 
   const videoScript: VideoScript = parsed.short_video_script || {
     hook: summary.one_liner,
