@@ -117,6 +117,10 @@ export function getDb() {
       )
     `);
     db.exec(`CREATE INDEX IF NOT EXISTS idx_annotations_video ON annotations(video_id, timestamp)`);
+
+    // Layer 7 護城河: is_featured 欄位給 curated 公開頁用
+    addCol("is_featured", "INTEGER DEFAULT 0");
+    addCol("featured_note", "TEXT"); // 允雷對這支影片的個人推薦理由
   }
   return db;
 }
@@ -161,4 +165,6 @@ export interface SummaryRow {
   burned_video_url: string | null;
   burn_status: string | null;
   burn_error: string | null;
+  is_featured: number;
+  featured_note: string | null;
 }
