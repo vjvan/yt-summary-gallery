@@ -121,6 +121,9 @@ export default function CardDetailPage() {
   const source = (data.source as string) || "youtube";
   const isVideo = !!data.is_video;
   const burnedVideoUrl = (data.burned_video_url as string | null) || null;
+  const burnedZhUrl = (data.burned_zh_url as string | null) || null;
+  const burnedEnUrl = (data.burned_en_url as string | null) || null;
+  const burnTrack = (data.burn_track as string | null) || null;
   const videoUrl = (data.video_url as string | null) || null;
   const srtEnPath = (data.srt_en_path as string | null) || null;
   const srtZhPath = (data.srt_zh_path as string | null) || null;
@@ -138,11 +141,11 @@ export default function CardDetailPage() {
     fallbackRatio = fallback / segments.length;
   }
 
-  async function handleBurn(hwaccel: boolean) {
+  async function handleBurn(hwaccel: boolean, track: "bi" | "zh" | "en") {
     await fetch(`/api/summaries/${id}/burn`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hwaccel }),
+      body: JSON.stringify({ hwaccel, track }),
     });
     await refresh();
   }
@@ -483,6 +486,9 @@ export default function CardDetailPage() {
                     <VideoPlayerPanel
                       videoUrl={videoUrl}
                       burnedVideoUrl={burnedVideoUrl}
+                      burnedZhUrl={burnedZhUrl}
+                      burnedEnUrl={burnedEnUrl}
+                      burnTrack={burnTrack}
                       srtEnPath={srtEnPath}
                       srtZhPath={srtZhPath}
                       srtBiPath={srtBiPath}
@@ -570,6 +576,9 @@ export default function CardDetailPage() {
                   <VideoPlayerPanel
                     videoUrl={videoUrl}
                     burnedVideoUrl={burnedVideoUrl}
+                    burnedZhUrl={burnedZhUrl}
+                    burnedEnUrl={burnedEnUrl}
+                    burnTrack={burnTrack}
                     srtEnPath={srtEnPath}
                     srtZhPath={srtZhPath}
                     srtBiPath={srtBiPath}
@@ -684,9 +693,14 @@ export default function CardDetailPage() {
  * SRT 經 /api/srt-as-vtt 即時轉成 WebVTT 給 <track> 用。
  * 這個 HTML5 video 預覽不依賴燒錄,字幕 ready 立刻能看。
  */
+type BurnTrackUi = "bi" | "zh" | "en";
+
 function VideoPlayerPanel({
   videoUrl,
   burnedVideoUrl,
+  burnedZhUrl,
+  burnedEnUrl,
+  burnTrack,
   srtEnPath,
   srtZhPath,
   srtBiPath,
@@ -702,6 +716,9 @@ function VideoPlayerPanel({
 }: {
   videoUrl: string | null;
   burnedVideoUrl: string | null;
+  burnedZhUrl: string | null;
+  burnedEnUrl: string | null;
+  burnTrack: string | null;
   srtEnPath: string | null;
   srtZhPath: string | null;
   srtBiPath: string | null;
@@ -710,12 +727,13 @@ function VideoPlayerPanel({
   burnError: string | null;
   fallbackRatio: number;
   initialSeekSec: number | null;
-  onBurn: (hwaccel: boolean) => void;
+  onBurn: (hwaccel: boolean, track: BurnTrackUi) => void;
   onRetranslate: () => void;
   onTimeUpdate?: (t: number) => void;
   onPlayerReady?: (api: { seekTo: (t: number) => void }) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [selTrack, setSelTrack] = useState<BurnTrackUi>("bi");
 
   // 從 /search 跳過來時 hash 帶 #t=153,在 video metadata 載入後 seek 並 play
   useEffect(() => {
@@ -755,11 +773,27 @@ function VideoPlayerPanel({
   const vttZh = srtZhPath && srtZhPath !== srtBiPath ? srtToVttUrl(srtZhPath) : null;
 
   const downloads: { href: string; label: string; primary?: boolean }[] = [];
-  if (burnedVideoUrl) downloads.push({ href: burnedVideoUrl, label: "下載已燒字幕影片 mp4", primary: true });
+  if (burnedVideoUrl) downloads.push({ href: burnedVideoUrl, label: "下載已燒字幕影片(雙語) mp4", primary: true });
+  if (burnedZhUrl) downloads.push({ href: burnedZhUrl, label: "下載已燒字幕影片(中文) mp4", primary: true });
+  if (burnedEnUrl) downloads.push({ href: burnedEnUrl, label: "下載已燒字幕影片(英文) mp4", primary: true });
   if (videoUrl) downloads.push({ href: videoUrl, label: "下載原始影片 mp4" });
   if (srtBiPath && isTranslated && srtBiPath !== srtZhPath) downloads.push({ href: srtBiPath, label: "雙語 SRT(VLC/IINA 掛字幕用)" });
   if (srtEnPath && isTranslated) downloads.push({ href: srtEnPath, label: "原文 SRT" });
   if (srtZhPath) downloads.push({ href: srtZhPath, label: isTranslated ? "中譯 SRT" : "字幕 SRT" });
+
+  // 燒錄語系選項。未翻譯的影片只有單一字幕檔,只給一個選項。
+  const trackOptions: { key: BurnTrackUi; label: string; burnedUrl: string | null; available: boolean }[] =
+    isTranslated
+      ? [
+          { key: "bi", label: "雙語(上英下中)", burnedUrl: burnedVideoUrl, available: !!srtBiPath },
+          { key: "zh", label: "只燒中文", burnedUrl: burnedZhUrl, available: !!srtZhPath },
+          { key: "en", label: "只燒英文", burnedUrl: burnedEnUrl, available: !!srtEnPath },
+        ]
+      : [{ key: "bi", label: "字幕", burnedUrl: burnedVideoUrl, available: !!srtBiPath }];
+  const hasUnburned = trackOptions.some((t) => t.available && !t.burnedUrl);
+  const selOption = trackOptions.find((t) => t.key === selTrack) || trackOptions[0];
+  const burningLabel =
+    burnTrack === "zh" ? "中文" : burnTrack === "en" ? "英文" : "雙語";
 
   return (
     <div className="mb-6">
@@ -790,7 +824,7 @@ function VideoPlayerPanel({
         </p>
       )}
       {burnedVideoUrl && (
-        <p className="text-xs text-center text-gray-400 mb-3">已燒上雙語字幕</p>
+        <p className="text-xs text-center text-gray-400 mb-3">player 播放的是已燒雙語字幕版本</p>
       )}
 
       {/* 翻譯品質指示 + 重翻按鈕 */}
@@ -831,13 +865,15 @@ function VideoPlayerPanel({
         ))}
       </div>
 
-      {/* 燒字幕按鈕區 */}
-      {!burnedVideoUrl && srtBiPath && (
+      {/* 燒字幕按鈕區: 三種語系獨立燒錄,燒過的顯示 ✓ 並出現在上方下載清單 */}
+      {srtBiPath && hasUnburned && (
         <div className="border-t pt-4">
           {burnStatus === "burning" && (
             <div className="text-center py-3 px-4 bg-orange-50 rounded-lg">
               <span className="inline-block w-4 h-4 mr-2 border-2 border-orange-400 border-t-transparent rounded-full animate-spin align-middle" />
-              <span className="text-sm text-orange-700 font-bold">字幕燒錄中(背景進行,可關閉頁面)</span>
+              <span className="text-sm text-orange-700 font-bold">
+                {burningLabel}字幕燒錄中(背景進行,可關閉頁面)
+              </span>
             </div>
           )}
           {burnStatus === "error" && (
@@ -851,18 +887,45 @@ function VideoPlayerPanel({
               <p className="text-xs text-gray-500 text-center mb-2">
                 把字幕燒進影片(輸出可分享給沒裝 VLC 的人)
               </p>
-              <button
-                onClick={() => onBurn(true)}
-                className="w-full py-3 font-bold text-white bg-purple-500 hover:bg-purple-600 rounded-lg transition-colors"
-              >
-                燒進影片(快速,videotoolbox 硬體加速)
-              </button>
-              <button
-                onClick={() => onBurn(false)}
-                className="w-full py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors"
-              >
-                或使用高品質模式(libx264,慢 5-10 倍)
-              </button>
+              {trackOptions.length > 1 && (
+                <div className="flex gap-2 justify-center mb-2">
+                  {trackOptions.map((t) => (
+                    <button
+                      key={t.key}
+                      onClick={() => setSelTrack(t.key)}
+                      disabled={!t.available}
+                      className={`px-4 py-2 rounded-lg text-sm font-bold border-2 transition-colors ${
+                        selTrack === t.key
+                          ? "border-purple-500 bg-purple-50 text-purple-700"
+                          : "border-gray-200 text-gray-500 hover:border-gray-300"
+                      } ${!t.available ? "opacity-40 cursor-not-allowed" : ""}`}
+                    >
+                      {t.label}
+                      {t.burnedUrl ? " ✓" : ""}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {selOption.burnedUrl ? (
+                <p className="text-sm text-center text-green-600 py-2">
+                  此語系已燒錄完成,上方可下載
+                </p>
+              ) : (
+                <>
+                  <button
+                    onClick={() => onBurn(true, selOption.key)}
+                    className="w-full py-3 font-bold text-white bg-purple-500 hover:bg-purple-600 rounded-lg transition-colors"
+                  >
+                    燒進影片(快速,videotoolbox 硬體加速)
+                  </button>
+                  <button
+                    onClick={() => onBurn(false, selOption.key)}
+                    className="w-full py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors"
+                  >
+                    或使用高品質模式(libx264,慢 5-10 倍)
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>

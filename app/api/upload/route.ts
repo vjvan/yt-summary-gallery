@@ -6,6 +6,7 @@ import { translateSegments, translatePlainText } from "@/lib/pipeline/translate"
 import { writeSubtitleFiles } from "@/lib/pipeline/burn-bilingual";
 import { runVideoPipeline } from "@/lib/pipeline/run-video-pipeline";
 import { transcribeAudio, probeDuration } from "@/lib/pipeline/transcribe";
+import { maybeAutoBurn, isBurnTrack } from "@/lib/pipeline/start-burn";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -83,6 +84,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // 「完成後自動燒錄」: ?autoburn=bi|zh|en (只對影片有意義)
+    const autoburnRaw = req.nextUrl.searchParams.get("autoburn");
+    const autoBurn = isBurnTrack(autoburnRaw) ? autoburnRaw : null;
+
     const fileExt = fileName.split(".").pop()?.toLowerCase() || "";
     const isVideo = VIDEO_EXTS.includes(fileExt);
     const fileSize = fs.statSync(stagedPath).size;
@@ -105,12 +110,12 @@ export async function POST(req: NextRequest) {
     const id = (existing?.id as string) || crypto.randomUUID();
     if (!existing) {
       db.prepare(
-        "INSERT INTO summaries (id, video_id, url, source, status, title, is_video) VALUES (?, ?, ?, ?, 'processing', ?, ?)"
-      ).run(id, contentId, `upload://${fileName}`, isVideo ? "video" : "podcast", title, isVideo ? 1 : 0);
+        "INSERT INTO summaries (id, video_id, url, source, status, title, is_video, auto_burn) VALUES (?, ?, ?, ?, 'processing', ?, ?, ?)"
+      ).run(id, contentId, `upload://${fileName}`, isVideo ? "video" : "podcast", title, isVideo ? 1 : 0, isVideo ? autoBurn : null);
     } else {
       db.prepare(
-        "UPDATE summaries SET status = 'processing', error = NULL, pipeline_stage = NULL, is_video = ?, source = ? WHERE id = ?"
-      ).run(isVideo ? 1 : 0, isVideo ? "video" : "podcast", id);
+        "UPDATE summaries SET status = 'processing', error = NULL, pipeline_stage = NULL, is_video = ?, source = ?, auto_burn = ? WHERE id = ?"
+      ).run(isVideo ? 1 : 0, isVideo ? "video" : "podcast", isVideo ? autoBurn : null, id);
     }
 
     const tmpDir = path.join(process.cwd(), "data", "tmp", contentId);
@@ -140,11 +145,13 @@ export async function POST(req: NextRequest) {
       fs.copyFileSync(rawPath, path.join(publicVideoDir, rawFileName));
       db.prepare("UPDATE summaries SET video_url = ? WHERE id = ?").run(`/videos/${rawFileName}`, id);
 
-      runVideoPipeline({ id, contentId, videoPath: rawPath, title }).catch((err) => {
-        console.error("Video pipeline error:", err);
-        getDb().prepare("UPDATE summaries SET status = 'error', error = ? WHERE id = ?")
-          .run(err.message?.slice(0, 500) || "Unknown error", id);
-      });
+      runVideoPipeline({ id, contentId, videoPath: rawPath, title })
+        .then(() => maybeAutoBurn(id))
+        .catch((err) => {
+          console.error("Video pipeline error:", err);
+          getDb().prepare("UPDATE summaries SET status = 'error', error = ? WHERE id = ?")
+            .run(err.message?.slice(0, 500) || "Unknown error", id);
+        });
     }
 
     return NextResponse.json({ id, status: "processing" });

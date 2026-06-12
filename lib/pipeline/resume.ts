@@ -24,6 +24,7 @@ import {
   type Summary,
 } from "./extract-summary";
 import { renderCard } from "./render-card";
+import { maybeAutoBurn } from "./start-burn";
 import type { TranscriptSegment, VideoMetadata } from "./fetch-transcript";
 
 const RESUMABLE_STAGES = new Set(["transcribed", "translated", "summarized"]);
@@ -149,6 +150,9 @@ export async function resumeSummaryPipeline(rowId: string): Promise<void> {
   db.prepare(
     `UPDATE summaries SET card_paths = ?, slide_count = ?, status = 'done', pipeline_stage = 'done' WHERE id = ?`
   ).run(JSON.stringify(publicPaths), publicPaths.length, row.id);
+
+  // 上傳時若勾了「完成後自動燒錄」,續跑完成也要兌現
+  maybeAutoBurn(row.id);
 }
 
 /**

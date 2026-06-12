@@ -125,6 +125,12 @@ export function getDb() {
     // Jobs 持久化: pipeline 階段 checkpoint,server 重啟後從斷點續跑
     // 值: NULL(尚未轉錄完) → 'transcribed' → 'translated' → 'summarized' → 'done'
     addCol("pipeline_stage", "TEXT");
+
+    // 燒錄語系選擇: bi(雙語,沿用 burned_video_url) / zh / en 各自獨立輸出
+    addCol("burned_zh_url", "TEXT");
+    addCol("burned_en_url", "TEXT");
+    addCol("burn_track", "TEXT");  // 目前/上次燒錄的語系
+    addCol("auto_burn", "TEXT");   // 上傳時勾「完成後自動燒錄」: 'bi'|'zh'|'en'
   }
   return db;
 }
@@ -172,4 +178,8 @@ export interface SummaryRow {
   is_featured: number;
   featured_note: string | null;
   pipeline_stage: string | null;
+  burned_zh_url: string | null;
+  burned_en_url: string | null;
+  burn_track: string | null;
+  auto_burn: string | null;
 }

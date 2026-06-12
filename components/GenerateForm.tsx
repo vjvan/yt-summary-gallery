@@ -10,6 +10,8 @@ export default function GenerateForm({
   const [url, setUrl] = useState("");
   const [status, setStatus] = useState<"idle" | "processing" | "done" | "error">("idle");
   const [message, setMessage] = useState("");
+  const [autoBurn, setAutoBurn] = useState(false);
+  const [autoBurnTrack, setAutoBurnTrack] = useState<"bi" | "zh" | "en">("bi");
   const fileRef = useRef<HTMLInputElement>(null);
 
   function pollForCompletion(id: string) {
@@ -84,8 +86,9 @@ export default function GenerateForm({
       // 串流上傳:body 直接是檔案,瀏覽器邊讀邊送、server 邊收邊寫盤。
       // 不走 FormData — req.formData() 會把整個檔案讀進記憶體,GB 級影片會炸。
       const title = file.name.replace(/\.[^.]+$/, "").replace(/[-_]/g, " ");
+      const autoburnParam = autoBurn ? `&autoburn=${autoBurnTrack}` : "";
       const resp = await fetch(
-        `/api/upload?filename=${encodeURIComponent(file.name)}&title=${encodeURIComponent(title)}`,
+        `/api/upload?filename=${encodeURIComponent(file.name)}&title=${encodeURIComponent(title)}${autoburnParam}`,
         {
           method: "POST",
           headers: { "content-type": "application/octet-stream" },
@@ -161,6 +164,33 @@ export default function GenerateForm({
           className="hidden"
         />
       </label>
+
+      {/* 影片完成後自動燒錄字幕(對音訊檔無效) */}
+      <div className="mt-2 flex items-center justify-center gap-2 text-sm text-gray-500">
+        <label className="flex items-center gap-1.5 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={autoBurn}
+            onChange={(e) => setAutoBurn(e.target.checked)}
+            disabled={status === "processing"}
+            className="accent-purple-500"
+          />
+          完成後自動燒錄字幕
+        </label>
+        {autoBurn && (
+          <select
+            value={autoBurnTrack}
+            onChange={(e) => setAutoBurnTrack(e.target.value as "bi" | "zh" | "en")}
+            disabled={status === "processing"}
+            className="border border-gray-300 rounded-md px-2 py-1 text-sm text-gray-600"
+          >
+            <option value="bi">雙語(上英下中)</option>
+            <option value="zh">只燒中文</option>
+            <option value="en">只燒英文</option>
+          </select>
+        )}
+        {autoBurn && <span className="text-xs text-gray-400">(限影片檔,入庫後背景燒錄)</span>}
+      </div>
 
       {message && (
         <p

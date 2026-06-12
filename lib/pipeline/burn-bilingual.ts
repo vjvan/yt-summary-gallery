@@ -168,15 +168,16 @@ export interface BurnInput {
   outputDir: string;
   contentId: string;
   hwaccel?: boolean; // Mac 用 h264_videotoolbox,速度快 5-10x
+  outputSuffix?: string; // 語系後綴: '' (雙語,沿用舊檔名) / '.zh' / '.en'
 }
 
 /**
  * 燒字幕到影片(獨立 step,on-demand 觸發)。
  */
 export async function burnSubtitleToVideo(input: BurnInput): Promise<string> {
-  const { videoPath, srtPath, outputDir, contentId, hwaccel = true } = input;
+  const { videoPath, srtPath, outputDir, contentId, hwaccel = true, outputSuffix = "" } = input;
   fs.mkdirSync(outputDir, { recursive: true });
-  const burnedVideoPath = path.join(outputDir, `${contentId}.burned.mp4`);
+  const burnedVideoPath = path.join(outputDir, `${contentId}.burned${outputSuffix}.mp4`);
   await burnSubtitle(videoPath, srtPath, burnedVideoPath, hwaccel);
   return burnedVideoPath;
 }
