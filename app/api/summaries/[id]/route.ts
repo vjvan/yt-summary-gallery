@@ -43,15 +43,18 @@ export async function DELETE(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // Delete card files
-  if (row.card_paths) {
-    try {
-      const paths = JSON.parse(row.card_paths) as string[];
-      for (const p of paths) {
-        const filePath = path.join(process.cwd(), "public", p);
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      }
-    } catch {}
+  // 清掉這支影片的所有磁碟產物。以前只刪卡片 PNG,
+  // 影片(GB 級)/burned mp4/SRT/tmp 全部殘留,磁碟用量只增不減。
+  const root = process.cwd();
+  const publicDir = path.join(root, "public");
+  const rmrf = (p: string) => {
+    try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* ignore */ }
+  };
+  rmrf(path.join(publicDir, "cards", row.video_id));
+  rmrf(path.join(publicDir, "burned", row.video_id));
+  rmrf(path.join(root, "data", "tmp", row.video_id));
+  for (const url of [row.video_url, row.audio_url, row.burned_video_url, row.burned_zh_url, row.burned_en_url]) {
+    if (url && url.startsWith("/")) rmrf(path.join(publicDir, url.replace(/^\//, "")));
   }
 
   db.prepare("DELETE FROM summaries WHERE id = ?").run(row.id);
