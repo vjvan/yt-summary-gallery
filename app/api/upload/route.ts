@@ -9,32 +9,89 @@ import { transcribeAudio, probeDuration } from "@/lib/pipeline/transcribe";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import { Readable } from "stream";
+import { pipeline as streamPipeline } from "stream/promises";
+import type { ReadableStream as NodeWebReadableStream } from "stream/web";
 
 const AUDIO_EXTS = ["mp3", "m4a", "wav", "ogg", "opus", "aac", "flac"];
 const VIDEO_EXTS = ["mp4", "mov", "mkv", "webm", "m4v", "avi"];
 
+function defaultTitle(fileName: string): string {
+  return fileName.replace(/\.[^.]+$/, "").replace(/[-_]/g, " ") || "Upload";
+}
+
+function validateExt(fileName: string): NextResponse | null {
+  const ext = fileName.split(".").pop()?.toLowerCase() || "";
+  if (AUDIO_EXTS.includes(ext) || VIDEO_EXTS.includes(ext)) return null;
+  return NextResponse.json(
+    { error: `不支援的檔案格式。支援音訊: ${AUDIO_EXTS.join(", ")} 影片: ${VIDEO_EXTS.join(", ")}` },
+    { status: 400 }
+  );
+}
+
+function stagingPath(): string {
+  const dir = path.join(process.cwd(), "data", "tmp");
+  fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, `incoming-${crypto.randomUUID()}`);
+}
+
 export async function POST(req: NextRequest) {
+  // 串流暫存檔:還沒算出 contentId 前先落地到這裡,結束後 rename 進正式位置
+  let stagedPath: string | null = null;
+
   try {
-    const formData = await req.formData();
-    const file = formData.get("file") as File | null;
-    const title = (formData.get("title") as string) || "Upload";
+    const contentType = req.headers.get("content-type") || "";
+    let fileName: string;
+    let title: string;
 
-    if (!file) {
-      return NextResponse.json({ error: "請上傳音訊或影片檔" }, { status: 400 });
-    }
+    if (contentType.includes("multipart/form-data")) {
+      // 相容路徑(小檔 / curl -F)。大檔走下面的串流路徑:
+      // req.formData() 會把整個 body 讀進記憶體解析,GB 級影片會直接炸
+      // "Failed to parse body as FormData"。
+      const formData = await req.formData();
+      const file = formData.get("file") as File | null;
+      if (!file) {
+        return NextResponse.json({ error: "請上傳音訊或影片檔" }, { status: 400 });
+      }
+      fileName = file.name;
+      title = (formData.get("title") as string) || defaultTitle(fileName);
 
-    const fileExt = file.name.split(".").pop()?.toLowerCase() || "";
-    const isVideo = VIDEO_EXTS.includes(fileExt);
-    const isAudio = AUDIO_EXTS.includes(fileExt);
+      const extErr = validateExt(fileName);
+      if (extErr) return extErr;
 
-    if (!isVideo && !isAudio) {
-      return NextResponse.json(
-        { error: `不支援的檔案格式。支援音訊: ${AUDIO_EXTS.join(", ")} 影片: ${VIDEO_EXTS.join(", ")}` },
-        { status: 400 }
+      stagedPath = stagingPath();
+      fs.writeFileSync(stagedPath, Buffer.from(await file.arrayBuffer()));
+    } else {
+      // 串流路徑(前端預設):POST body 直接是檔案內容,邊收邊寫盤,
+      // 記憶體用量恆定,2.8GB 的 4K 錄影也能直接拖進來。
+      fileName = decodeURIComponent(req.nextUrl.searchParams.get("filename") || "");
+      if (!fileName) {
+        return NextResponse.json({ error: "串流上傳需帶 ?filename= 參數" }, { status: 400 });
+      }
+      title = req.nextUrl.searchParams.get("title") || defaultTitle(fileName);
+
+      const extErr = validateExt(fileName);
+      if (extErr) return extErr;
+
+      if (!req.body) {
+        return NextResponse.json({ error: "沒有收到檔案內容" }, { status: 400 });
+      }
+      stagedPath = stagingPath();
+      await streamPipeline(
+        Readable.fromWeb(req.body as unknown as NodeWebReadableStream),
+        fs.createWriteStream(stagedPath)
       );
     }
 
-    const contentId = crypto.createHash("md5").update(file.name + file.size).digest("hex").slice(0, 12);
+    const fileExt = fileName.split(".").pop()?.toLowerCase() || "";
+    const isVideo = VIDEO_EXTS.includes(fileExt);
+    const fileSize = fs.statSync(stagedPath).size;
+    if (fileSize < 1000) {
+      return NextResponse.json({ error: "檔案內容是空的或不完整" }, { status: 400 });
+    }
+
+    // 與舊版一致: md5(檔名 + 檔案大小),同檔重傳會去重
+    const contentId = crypto.createHash("md5").update(fileName + fileSize).digest("hex").slice(0, 12);
     const db = getDb();
 
     const existing = db
@@ -49,7 +106,7 @@ export async function POST(req: NextRequest) {
     if (!existing) {
       db.prepare(
         "INSERT INTO summaries (id, video_id, url, source, status, title, is_video) VALUES (?, ?, ?, ?, 'processing', ?, ?)"
-      ).run(id, contentId, `upload://${file.name}`, isVideo ? "video" : "podcast", title, isVideo ? 1 : 0);
+      ).run(id, contentId, `upload://${fileName}`, isVideo ? "video" : "podcast", title, isVideo ? 1 : 0);
     } else {
       db.prepare(
         "UPDATE summaries SET status = 'processing', error = NULL, pipeline_stage = NULL, is_video = ?, source = ? WHERE id = ?"
@@ -61,8 +118,10 @@ export async function POST(req: NextRequest) {
 
     const rawFileName = `${contentId}.${fileExt}`;
     const rawPath = path.join(tmpDir, rawFileName);
-    const buffer = Buffer.from(await file.arrayBuffer());
-    fs.writeFileSync(rawPath, buffer);
+    fs.renameSync(stagedPath, rawPath);
+    stagedPath = null; // 已就位,catch/finally 不用再清
+
+    const isAudio = AUDIO_EXTS.includes(fileExt);
 
     if (isAudio) {
       const publicAudioDir = path.join(process.cwd(), "public", "audio");
@@ -92,6 +151,11 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });
+  } finally {
+    // 早退(400/去重)或出錯時清掉串流暫存檔;成功路徑已 rename 並把 stagedPath 設 null
+    if (stagedPath && fs.existsSync(stagedPath)) {
+      try { fs.unlinkSync(stagedPath); } catch { /* ignore */ }
+    }
   }
 }
 

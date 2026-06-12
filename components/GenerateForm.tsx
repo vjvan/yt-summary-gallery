@@ -81,14 +81,17 @@ export default function GenerateForm({
     setMessage(`上傳中: ${file.name}...`);
 
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("title", file.name.replace(/\.[^.]+$/, "").replace(/[-_]/g, " "));
-
-      const resp = await fetch("/api/upload", {
-        method: "POST",
-        body: formData,
-      });
+      // 串流上傳:body 直接是檔案,瀏覽器邊讀邊送、server 邊收邊寫盤。
+      // 不走 FormData — req.formData() 會把整個檔案讀進記憶體,GB 級影片會炸。
+      const title = file.name.replace(/\.[^.]+$/, "").replace(/[-_]/g, " ");
+      const resp = await fetch(
+        `/api/upload?filename=${encodeURIComponent(file.name)}&title=${encodeURIComponent(title)}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/octet-stream" },
+          body: file,
+        }
+      );
 
       const data = await resp.json();
 
