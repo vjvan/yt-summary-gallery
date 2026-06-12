@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
       ).run(id, contentId, `upload://${file.name}`, isVideo ? "video" : "podcast", title, isVideo ? 1 : 0);
     } else {
       db.prepare(
-        "UPDATE summaries SET status = 'processing', error = NULL, is_video = ?, source = ? WHERE id = ?"
+        "UPDATE summaries SET status = 'processing', error = NULL, pipeline_stage = NULL, is_video = ?, source = ? WHERE id = ?"
       ).run(isVideo ? 1 : 0, isVideo ? "video" : "podcast", id);
     }
 
@@ -108,18 +108,23 @@ async function runAudioPipeline(id: string, contentId: string, audioPath: string
   // 壓縮 / 25MB 切段 / 上傳都在 transcribeAudio 內處理(非阻塞,不再凍住 event loop)
   const { text: transcript, segments } = await transcribeAudio(audioPath, { tmpDir });
 
-  const { translated: segmentsZh, wasTranslated } = await translateSegments(segments);
-  const transcriptZh = wasTranslated ? translatePlainText(segmentsZh) : null;
-
+  // checkpoint: 轉錄完成(最貴的一步),重啟後可從這裡續跑,不重花 Whisper 錢
   const mins = Math.floor(duration / 60);
   const secs = Math.floor(duration % 60);
   db.prepare(
     `UPDATE summaries SET title = ?, channel = 'Podcast', duration = ?, duration_display = ?,
-     transcript_source = 'whisper', transcript = ?, segments = ?,
-     transcript_zh = ?, segments_zh = ?, is_translated = ? WHERE id = ?`
+     transcript_source = 'whisper', transcript = ?, segments = ?, pipeline_stage = 'transcribed' WHERE id = ?`
   ).run(
     title, duration, `${mins}:${secs.toString().padStart(2, "0")}`,
-    transcript, JSON.stringify(segments),
+    transcript, JSON.stringify(segments), id
+  );
+
+  const { translated: segmentsZh, wasTranslated } = await translateSegments(segments);
+  const transcriptZh = wasTranslated ? translatePlainText(segmentsZh) : null;
+
+  db.prepare(
+    `UPDATE summaries SET transcript_zh = ?, segments_zh = ?, is_translated = ? WHERE id = ?`
+  ).run(
     transcriptZh, wasTranslated ? JSON.stringify(segmentsZh) : null,
     wasTranslated ? 1 : 0, id
   );
@@ -134,7 +139,7 @@ async function runAudioPipeline(id: string, contentId: string, audioPath: string
   const toPublic = (p: string | null) =>
     p ? "/" + path.relative(path.join(process.cwd(), "public"), p).split(path.sep).join("/") : null;
   db.prepare(
-    `UPDATE summaries SET srt_en_path = ?, srt_zh_path = ?, srt_bi_path = ? WHERE id = ?`
+    `UPDATE summaries SET srt_en_path = ?, srt_zh_path = ?, srt_bi_path = ?, pipeline_stage = 'translated' WHERE id = ?`
   ).run(toPublic(srt.srtEnPath), toPublic(srt.srtZhPath), toPublic(srt.srtBiPath), id);
 
   const segmentsForGpt = wasTranslated ? segmentsZh : segments;
@@ -147,6 +152,8 @@ async function runAudioPipeline(id: string, contentId: string, audioPath: string
     : (transcriptZh || transcript);
 
   const summary = await extractSummaryVerified(timestamped, title, "Podcast", duration);
+  db.prepare(`UPDATE summaries SET summary = ?, pipeline_stage = 'summarized' WHERE id = ?`)
+    .run(JSON.stringify(summary), id);
 
   const metadata = {
     video_id: contentId, title, channel: "Podcast",
@@ -158,6 +165,6 @@ async function runAudioPipeline(id: string, contentId: string, audioPath: string
   const publicPaths = slidePaths.map((_, i) => `/cards/${contentId}/slide-${i + 1}.png`);
 
   db.prepare(
-    `UPDATE summaries SET summary = ?, card_paths = ?, slide_count = ?, status = 'done' WHERE id = ?`
-  ).run(JSON.stringify(summary), JSON.stringify(publicPaths), publicPaths.length, id);
+    `UPDATE summaries SET card_paths = ?, slide_count = ?, status = 'done', pipeline_stage = 'done' WHERE id = ?`
+  ).run(JSON.stringify(publicPaths), publicPaths.length, id);
 }

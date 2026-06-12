@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import fs from "fs";
 import path from "path";
 
 const DB_PATH = path.join(process.cwd(), "data", "summaries.db");
@@ -7,7 +8,6 @@ let db: Database.Database;
 
 export function getDb() {
   if (!db) {
-    const fs = require("fs");
     fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
     db = new Database(DB_PATH);
@@ -121,6 +121,10 @@ export function getDb() {
     // Layer 7 護城河: is_featured 欄位給 curated 公開頁用
     addCol("is_featured", "INTEGER DEFAULT 0");
     addCol("featured_note", "TEXT"); // 允雷對這支影片的個人推薦理由
+
+    // Jobs 持久化: pipeline 階段 checkpoint,server 重啟後從斷點續跑
+    // 值: NULL(尚未轉錄完) → 'transcribed' → 'translated' → 'summarized' → 'done'
+    addCol("pipeline_stage", "TEXT");
   }
   return db;
 }
@@ -167,4 +171,5 @@ export interface SummaryRow {
   burn_error: string | null;
   is_featured: number;
   featured_note: string | null;
+  pipeline_stage: string | null;
 }

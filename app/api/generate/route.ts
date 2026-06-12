@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
       ).run(id, contentId, url, source, isVideo);
     } else {
       db.prepare(
-        "UPDATE summaries SET status = 'processing', error = NULL, source = ?, is_video = ? WHERE id = ?"
+        "UPDATE summaries SET status = 'processing', error = NULL, pipeline_stage = NULL, source = ?, is_video = ? WHERE id = ?"
       ).run(source, isVideo, id);
     }
 
@@ -111,21 +111,26 @@ async function runYoutubeOrPodcastPipeline(id: string, url: string, contentId: s
   }
   const { metadata, transcript, segments } = result;
 
-  const { translated: segmentsZh, wasTranslated } = await translateSegments(segments);
-  const transcriptZh = wasTranslated ? translatePlainText(segmentsZh) : null;
-
+  // checkpoint: 轉錄/字幕取得完成(最貴的一步),重啟後可從這裡續跑
   const audioUrl = source === "podcast" && /\.(mp3|m4a|wav|ogg)/i.test(url) ? url : null;
-
   db.prepare(
     `UPDATE summaries SET title = ?, channel = ?, duration = ?, duration_display = ?,
      thumbnail_url = ?, transcript_source = ?, transcript = ?, segments = ?,
-     transcript_zh = ?, segments_zh = ?, is_translated = ?, source = ?, audio_url = ? WHERE id = ?`
+     source = ?, audio_url = ?, pipeline_stage = 'transcribed' WHERE id = ?`
   ).run(
     metadata.title, metadata.channel, metadata.duration, metadata.duration_display,
     metadata.thumbnail_url, metadata.transcript_source,
-    transcript, JSON.stringify(segments),
+    transcript, JSON.stringify(segments), source, audioUrl, id
+  );
+
+  const { translated: segmentsZh, wasTranslated } = await translateSegments(segments);
+  const transcriptZh = wasTranslated ? translatePlainText(segmentsZh) : null;
+
+  db.prepare(
+    `UPDATE summaries SET transcript_zh = ?, segments_zh = ?, is_translated = ? WHERE id = ?`
+  ).run(
     transcriptZh, wasTranslated ? JSON.stringify(segmentsZh) : null,
-    wasTranslated ? 1 : 0, source, audioUrl, id
+    wasTranslated ? 1 : 0, id
   );
 
   // YouTube / podcast 有 segments 也順手寫 SRT/VTT(下載到本機掛字幕用)
@@ -142,6 +147,7 @@ async function runYoutubeOrPodcastPipeline(id: string, url: string, contentId: s
       `UPDATE summaries SET srt_en_path = ?, srt_zh_path = ?, srt_bi_path = ? WHERE id = ?`
     ).run(toPublic(srt.srtEnPath), toPublic(srt.srtZhPath), toPublic(srt.srtBiPath), id);
   }
+  db.prepare(`UPDATE summaries SET pipeline_stage = 'translated' WHERE id = ?`).run(id);
 
   const segmentsForGpt = wasTranslated ? segmentsZh : segments;
   const timestampedTranscript = segmentsForGpt.length > 0
@@ -155,11 +161,13 @@ async function runYoutubeOrPodcastPipeline(id: string, url: string, contentId: s
   const summary = await extractSummaryVerified(
     timestampedTranscript, metadata.title, metadata.channel, metadata.duration
   );
+  db.prepare(`UPDATE summaries SET summary = ?, pipeline_stage = 'summarized' WHERE id = ?`)
+    .run(JSON.stringify(summary), id);
 
   const slidePaths = await renderCard(summary, metadata, cardDir);
   const publicPaths = slidePaths.map((_, i) => `/cards/${contentId}/slide-${i + 1}.png`);
 
   db.prepare(
-    `UPDATE summaries SET summary = ?, card_paths = ?, slide_count = ?, status = 'done' WHERE id = ?`
-  ).run(JSON.stringify(summary), JSON.stringify(publicPaths), publicPaths.length, id);
+    `UPDATE summaries SET card_paths = ?, slide_count = ?, status = 'done', pipeline_stage = 'done' WHERE id = ?`
+  ).run(JSON.stringify(publicPaths), publicPaths.length, id);
 }

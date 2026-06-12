@@ -44,14 +44,11 @@ export async function runVideoPipeline(input: VideoPipelineInput): Promise<void>
   // Step 3: Whisper transcription(壓縮 / 25MB 切段都在 transcribeAudio 內處理)
   const { text: transcript, segments } = await transcribeAudio(audioForWhisper, { tmpDir });
 
-  // Step 4: Translate (English → 繁中, 簡體 → 繁體)
-  const { translated: segmentsZh, wasTranslated } = await translateSegments(segments);
-  const transcriptZh = wasTranslated ? translatePlainText(segmentsZh) : null;
-
+  // checkpoint: 轉錄完成(最貴的一步),重啟後可從這裡續跑,不重花 Whisper 錢
   db.prepare(
     `UPDATE summaries SET title = ?, channel = ?, duration = ?, duration_display = ?,
      thumbnail_url = ?, transcript_source = 'whisper', transcript = ?, segments = ?,
-     transcript_zh = ?, segments_zh = ?, is_translated = ? WHERE id = ?`
+     pipeline_stage = 'transcribed' WHERE id = ?`
   ).run(
     title,
     input.channel || "Video",
@@ -60,6 +57,16 @@ export async function runVideoPipeline(input: VideoPipelineInput): Promise<void>
     input.thumbnailUrl || "",
     transcript,
     JSON.stringify(segments),
+    id
+  );
+
+  // Step 4: Translate (English → 繁中, 簡體 → 繁體)
+  const { translated: segmentsZh, wasTranslated } = await translateSegments(segments);
+  const transcriptZh = wasTranslated ? translatePlainText(segmentsZh) : null;
+
+  db.prepare(
+    `UPDATE summaries SET transcript_zh = ?, segments_zh = ?, is_translated = ? WHERE id = ?`
+  ).run(
     transcriptZh,
     wasTranslated ? JSON.stringify(segmentsZh) : null,
     wasTranslated ? 1 : 0,
@@ -78,7 +85,7 @@ export async function runVideoPipeline(input: VideoPipelineInput): Promise<void>
   const toPublic = (p: string | null) =>
     p ? "/" + path.relative(path.join(projectRoot, "public"), p).split(path.sep).join("/") : null;
   db.prepare(
-    `UPDATE summaries SET srt_en_path = ?, srt_zh_path = ?, srt_bi_path = ? WHERE id = ?`
+    `UPDATE summaries SET srt_en_path = ?, srt_zh_path = ?, srt_bi_path = ?, pipeline_stage = 'translated' WHERE id = ?`
   ).run(toPublic(srt.srtEnPath), toPublic(srt.srtZhPath), toPublic(srt.srtBiPath), id);
 
   // Step 6: Summary
@@ -92,6 +99,8 @@ export async function runVideoPipeline(input: VideoPipelineInput): Promise<void>
     : (transcriptZh || transcript);
 
   const summary = await extractSummaryVerified(timestamped, title, input.channel || "Video", duration);
+  db.prepare(`UPDATE summaries SET summary = ?, pipeline_stage = 'summarized' WHERE id = ?`)
+    .run(JSON.stringify(summary), id);
 
   // Step 7: Render carousel
   const metadata = {
@@ -110,6 +119,6 @@ export async function runVideoPipeline(input: VideoPipelineInput): Promise<void>
   const publicPaths = slidePaths.map((_, i) => `/cards/${contentId}/slide-${i + 1}.png`);
 
   db.prepare(
-    `UPDATE summaries SET summary = ?, card_paths = ?, slide_count = ?, status = 'done' WHERE id = ?`
-  ).run(JSON.stringify(summary), JSON.stringify(publicPaths), publicPaths.length, id);
+    `UPDATE summaries SET card_paths = ?, slide_count = ?, status = 'done', pipeline_stage = 'done' WHERE id = ?`
+  ).run(JSON.stringify(publicPaths), publicPaths.length, id);
 }
