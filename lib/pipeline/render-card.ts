@@ -266,13 +266,16 @@ function buildMermaidGraph(summary: Summary): string {
 ${branches}`;
 }
 
-export async function renderCard(
+/**
+ * 填模板:summary + metadata + theme → 完整 card.html 字串。
+ * renderCard(Playwright 截圖)和 editor route(可編輯 HTML 匯出)共用。
+ */
+export function buildCardHtml(
   summary: Summary,
   metadata: VideoMetadata,
-  outputDir: string,
   themeOverride?: string,
   includeRecall: boolean = false
-): Promise<string[]> {
+): { html: string; theme: CardTheme; layout: SlideId[] } {
   const template = fs.readFileSync(TEMPLATE_PATH, "utf-8");
   const theme = pickTheme(metadata.video_id, themeOverride);
   const layout = pickLayout(summary.video_genre, includeRecall);
@@ -297,6 +300,18 @@ export async function renderCard(
   html = html.replace(/\{\{theme_css\}\}/g, buildThemeCss(theme));
   html = html.replace(/\{\{accent_hex\}\}/g, theme.accent);
   html = html.replace(/\{\{accent_light_hex\}\}/g, theme.accentLight);
+
+  return { html, theme, layout };
+}
+
+export async function renderCard(
+  summary: Summary,
+  metadata: VideoMetadata,
+  outputDir: string,
+  themeOverride?: string,
+  includeRecall: boolean = false
+): Promise<string[]> {
+  const { html, layout } = buildCardHtml(summary, metadata, themeOverride, includeRecall);
 
   const { chromium } = await import("playwright");
   const browser = await chromium.launch();

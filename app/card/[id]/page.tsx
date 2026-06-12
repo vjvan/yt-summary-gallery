@@ -444,6 +444,23 @@ export default function CardDetailPage() {
                     >
                       下載此頁
                     </a>
+                    <a
+                      href={`/api/summaries/${id}/carousel`}
+                      download
+                      title="全部卡片 PNG (1080x1350 IG 4:5) + 自動生成的貼文文案 caption.txt"
+                      className="px-4 py-3 text-center font-bold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 transition-colors"
+                    >
+                      Carousel 打包
+                    </a>
+                    <a
+                      href={`/api/summaries/${id}/editor`}
+                      target="_blank"
+                      rel="noopener"
+                      title="開啟可編輯版卡片:點文字直接改、換主題、單張/全部匯出 PNG、下載成獨立 HTML 檔"
+                      className="px-4 py-3 text-center font-bold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors"
+                    >
+                      編輯卡片
+                    </a>
                     {segments.length > 0 && (
                       <a
                         href={`/api/summaries/${id}/srt`}
