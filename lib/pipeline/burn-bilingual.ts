@@ -10,7 +10,7 @@
 
 import fs from "fs";
 import path from "path";
-import { execSync } from "child_process";
+import { run } from "./run-command";
 import { segmentsToSrt, segmentsToVtt } from "./generate-srt";
 
 /**
@@ -82,12 +82,12 @@ function escapeForFfmpegFilter(p: string): string {
  * - filename 中 ":" 要 escape 成 "\:"
  * - force_style 中 "," 要 escape 成 "\,"(否則被 filter graph 當成 filter 分隔符)
  */
-function burnSubtitle(
+async function burnSubtitle(
   videoPath: string,
   srtPath: string,
   outputPath: string,
   hwaccel: boolean
-): void {
+): Promise<void> {
   const ffmpeg = resolveFfmpegWithSubtitles();
   const escapedPath = escapeForFfmpegFilter(srtPath);
   const styleParts = [
@@ -110,11 +110,11 @@ function burnSubtitle(
     ? "-c:v h264_videotoolbox -b:v 8M -tag:v avc1"
     : "-c:v libx264 -preset medium -crf 20";
 
-  execSync(
+  await run(
     `"${ffmpeg}" -i "${videoPath}" -vf "${filter}" ` +
       `${videoCodec} -c:a copy ` +
       `-movflags +faststart -y "${outputPath}"`,
-    { timeout: 3600000, stdio: "pipe" }
+    { timeoutMs: 3600000 }
   );
 }
 
@@ -177,7 +177,7 @@ export async function burnSubtitleToVideo(input: BurnInput): Promise<string> {
   const { videoPath, srtPath, outputDir, contentId, hwaccel = true } = input;
   fs.mkdirSync(outputDir, { recursive: true });
   const burnedVideoPath = path.join(outputDir, `${contentId}.burned.mp4`);
-  burnSubtitle(videoPath, srtPath, burnedVideoPath, hwaccel);
+  await burnSubtitle(videoPath, srtPath, burnedVideoPath, hwaccel);
   return burnedVideoPath;
 }
 
@@ -185,10 +185,10 @@ export async function burnSubtitleToVideo(input: BurnInput): Promise<string> {
  * 從影片抽出純音軌(給 Whisper 用)。
  * 單聲道 16kHz mp3,大幅縮小檔案,Whisper 也夠用。
  */
-export function extractAudioFromVideo(videoPath: string, outputPath: string): string {
-  execSync(
+export async function extractAudioFromVideo(videoPath: string, outputPath: string): Promise<string> {
+  await run(
     `ffmpeg -i "${videoPath}" -vn -ac 1 -ar 16000 -b:a 64k -y "${outputPath}"`,
-    { timeout: 600000, stdio: "pipe" }
+    { timeoutMs: 600000 }
   );
   return outputPath;
 }

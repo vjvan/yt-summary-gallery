@@ -1,6 +1,7 @@
-import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
+import { run } from "./run-command";
+import { transcribeAudio } from "./transcribe";
 
 const SUB_LANGS = "zh-Hant,zh-Hans,zh,en";
 
@@ -41,10 +42,9 @@ export interface TranscriptResult {
   segments: TranscriptSegment[];
 }
 
-export function fetchMetadata(url: string): VideoMetadata {
-  const raw = execSync(`yt-dlp --dump-json --skip-download "${url}"`, {
-    timeout: 60000,
-    encoding: "utf-8",
+export async function fetchMetadata(url: string): Promise<VideoMetadata> {
+  const raw = await run(`yt-dlp --dump-json --skip-download "${url}"`, {
+    timeoutMs: 60000,
   });
   const data = JSON.parse(raw);
   const duration = data.duration || 0;
@@ -91,7 +91,7 @@ function parseSrtToSegments(srtPath: string): TranscriptSegment[] {
     const textLines = lines.filter(
       (l) => l && !/^\d+$/.test(l) && !l.includes("-->")
     );
-    let segText = textLines.join(" ").replace(/<[^>]+>/g, "").trim();
+    const segText = textLines.join(" ").replace(/<[^>]+>/g, "").trim();
     if (!segText) continue;
 
     // Deduplicate
@@ -104,14 +104,14 @@ function parseSrtToSegments(srtPath: string): TranscriptSegment[] {
   return segments;
 }
 
-function fetchSubtitles(
+async function fetchSubtitles(
   url: string,
   tmpDir: string
-): { text: string; segments: TranscriptSegment[] } | null {
+): Promise<{ text: string; segments: TranscriptSegment[] } | null> {
   try {
-    execSync(
+    await run(
       `yt-dlp --write-auto-sub --write-sub --sub-lang ${SUB_LANGS} --sub-format srt --skip-download -o "${tmpDir}/%(id)s.%(ext)s" "${url}"`,
-      { timeout: 120000, encoding: "utf-8", stdio: "pipe" }
+      { timeoutMs: 120000 }
     );
   } catch {
     // subtitle download can fail silently
@@ -127,75 +127,41 @@ function fetchSubtitles(
   return { text, segments };
 }
 
-function transcribeWithWhisper(
+async function transcribeWithWhisper(
   url: string,
   tmpDir: string
-): { text: string; segments: TranscriptSegment[] } {
+): Promise<{ text: string; segments: TranscriptSegment[] }> {
   const audioPath = path.join(tmpDir, "audio.mp3");
 
-  execSync(
+  await run(
     `yt-dlp -x --audio-format mp3 --audio-quality 5 -o "${audioPath}" "${url}"`,
-    { timeout: 300000, stdio: "pipe" }
+    { timeoutMs: 300000 }
   );
 
   const mp3Files = fs.readdirSync(tmpDir).filter((f) => f.endsWith(".mp3"));
   if (mp3Files.length === 0) throw new Error("No audio file after download");
-  let finalPath = path.join(tmpDir, mp3Files[0]);
+  const finalPath = path.join(tmpDir, mp3Files[0]);
 
-  const stat = fs.statSync(finalPath);
-  if (stat.size > 25 * 1024 * 1024) {
-    const compressed = path.join(tmpDir, "compressed.mp3");
-    execSync(`ffmpeg -i "${finalPath}" -b:a 64k -ar 16000 -y "${compressed}"`, {
-      timeout: 300000,
-      stdio: "pipe",
-    });
-    finalPath = compressed;
-  }
-
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY not set");
-
-  // Use verbose_json to get segments with timestamps
-  const result = execSync(
-    `curl -s -X POST "https://api.openai.com/v1/audio/transcriptions" ` +
-      `-H "Authorization: Bearer ${apiKey}" ` +
-      `-F "file=@${finalPath}" ` +
-      `-F "model=whisper-1" ` +
-      `-F "language=zh" ` +
-      `-F "response_format=verbose_json" ` +
-      `--max-time 600`,
-    { encoding: "utf-8", timeout: 620000 }
-  );
-
-  const data = JSON.parse(result);
-  const segments: TranscriptSegment[] = (data.segments || []).map(
-    (s: { start: number; end: number; text: string }) => ({
-      start: s.start,
-      end: s.end,
-      text: s.text.trim(),
-    })
-  );
-
-  return {
-    text: data.text || segments.map((s) => s.text).join(" "),
-    segments,
-  };
+  // 壓縮 / 25MB 切段 / 上傳都在 transcribeAudio 內處理。
+  // 不再強制 language=zh:讓 Whisper 自動偵測,英文影片才不會被硬轉成中文逐字稿。
+  const result = await transcribeAudio(finalPath, { tmpDir });
+  return { text: result.text, segments: result.segments };
 }
 
-export function fetchTranscript(url: string, tmpDir: string): TranscriptResult {
+export async function fetchTranscript(url: string, tmpDir: string): Promise<TranscriptResult> {
   fs.mkdirSync(tmpDir, { recursive: true });
 
-  const metadata = fetchMetadata(url);
+  const metadata = await fetchMetadata(url);
 
   // Try subtitles first
-  const subs = fetchSubtitles(url, tmpDir);
+  const subs = await fetchSubtitles(url, tmpDir);
   if (subs && subs.text.length > 50) {
     metadata.transcript_source = "subtitle";
     return { metadata, transcript: subs.text, segments: subs.segments };
   }
 
   // Fallback to Whisper
-  const whisper = transcribeWithWhisper(url, tmpDir);
+  const whisper = await transcribeWithWhisper(url, tmpDir);
   metadata.transcript_source = "whisper";
   return { metadata, transcript: whisper.text, segments: whisper.segments };
 }

@@ -37,7 +37,7 @@ export async function POST(
 
   (async () => {
     try {
-      const result = fetchVideoFromUrl(url, videoId, process.cwd());
+      const result = await fetchVideoFromUrl(url, videoId, process.cwd());
       getDb()
         .prepare(`UPDATE summaries SET video_url = ?, is_video = 1 WHERE id = ?`)
         .run(result.publicVideoUrl, summaryRowId);

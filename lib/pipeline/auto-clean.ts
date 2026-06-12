@@ -6,7 +6,8 @@
 
 import fs from "fs";
 import path from "path";
-import { execSync } from "child_process";
+import { run } from "./run-command";
+import { transcribeAudio, probeDuration } from "./transcribe";
 import { segmentsToSrt } from "./generate-srt";
 
 const VIDEO_EXTS = ["mp4", "mov", "webm", "avi", "mkv"];
@@ -54,68 +55,19 @@ export interface AssembleResult {
 
 // ===== Shared utilities =====
 
-function getDuration(filePath: string): number {
-  try {
-    const probe = execSync(
-      `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`,
-      { encoding: "utf-8", timeout: 10000 }
-    ).trim();
-    return parseFloat(probe) || 0;
-  } catch {
-    return 0;
-  }
-}
-
-function extractAudio(videoPath: string, outputDir: string): string {
+async function extractAudio(videoPath: string, outputDir: string): Promise<string> {
   const audioPath = path.join(outputDir, "audio.mp3");
-  execSync(
+  await run(
     `ffmpeg -i "${videoPath}" -vn -b:a 128k -y "${audioPath}"`,
-    { timeout: 300000, stdio: "pipe" }
+    { timeoutMs: 300000 }
   );
   return audioPath;
-}
-
-function compressIfNeeded(audioPath: string, outputDir: string): string {
-  const stat = fs.statSync(audioPath);
-  if (stat.size <= 25 * 1024 * 1024) return audioPath;
-  const compressed = path.join(outputDir, "compressed.mp3");
-  execSync(
-    `ffmpeg -i "${audioPath}" -b:a 64k -ar 16000 -y "${compressed}"`,
-    { timeout: 300000, stdio: "pipe" }
-  );
-  return compressed;
 }
 
 interface WhisperWord {
   word: string;
   start: number;
   end: number;
-}
-
-function whisperTranscribe(audioPath: string): WhisperWord[] {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY not set");
-
-  const result = execSync(
-    `curl -s -X POST "https://api.openai.com/v1/audio/transcriptions" ` +
-      `-H "Authorization: Bearer ${apiKey}" ` +
-      `-F "file=@${audioPath}" ` +
-      `-F "model=whisper-1" ` +
-      `-F "language=zh" ` +
-      `-F "response_format=verbose_json" ` +
-      `-F "timestamp_granularities[]=word" ` +
-      `--max-time 600`,
-    { encoding: "utf-8", timeout: 620000 }
-  );
-
-  const data = JSON.parse(result);
-  return (data.words || []).map(
-    (w: { word: string; start: number; end: number }) => ({
-      word: w.word.trim(),
-      start: w.start,
-      end: w.end,
-    })
-  );
 }
 
 function isPureFiller(text: string): boolean {
@@ -303,21 +255,25 @@ export async function analyzeVideo(
 
   const ext = path.extname(videoPath).slice(1).toLowerCase();
   const isVideo = VIDEO_EXTS.includes(ext);
-  const originalDuration = getDuration(videoPath);
+  const originalDuration = await probeDuration(videoPath);
 
-  // Extract & compress audio
+  // Extract audio
   onProgress?.("extracting", "提取音訊中...");
   let audioPath: string;
   if (isVideo) {
-    audioPath = extractAudio(videoPath, workDir);
+    audioPath = await extractAudio(videoPath, workDir);
   } else {
     audioPath = videoPath;
   }
-  audioPath = compressIfNeeded(audioPath, workDir);
 
-  // Transcribe at word level
+  // Transcribe at word level(壓縮 / 25MB 切段在 transcribeAudio 內處理)
+  // 口播清理是允雷自己的中文錄影,保留 language=zh
   onProgress?.("transcribing", "辨識語音中...");
-  const words = whisperTranscribe(audioPath);
+  const { words }: { words: WhisperWord[] } = await transcribeAudio(audioPath, {
+    tmpDir: workDir,
+    language: "zh",
+    wordTimestamps: true,
+  });
 
   if (words.length === 0) {
     throw new Error("影片中未偵測到語音");
@@ -346,10 +302,11 @@ export async function analyzeVideo(
     .reduce((sum, i) => sum + i.duration, 0);
 
   // Cleanup audio temp files
-  const audioTemp = path.join(workDir, "audio.mp3");
-  if (fs.existsSync(audioTemp)) fs.unlinkSync(audioTemp);
-  const compTemp = path.join(workDir, "compressed.mp3");
-  if (fs.existsSync(compTemp)) fs.unlinkSync(compTemp);
+  for (const temp of ["audio.mp3", "whisper-compressed.mp3"]) {
+    const p = path.join(workDir, temp);
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+  }
+  fs.rmSync(path.join(workDir, "whisper-chunks"), { recursive: true, force: true });
 
   return {
     items,
@@ -372,7 +329,7 @@ export async function assembleClean(
 
   const ext = path.extname(videoPath).slice(1).toLowerCase();
   const isVideo = VIDEO_EXTS.includes(ext);
-  const originalDuration = getDuration(videoPath);
+  const originalDuration = await probeDuration(videoPath);
 
   const partFiles: string[] = [];
   const srtSegments: Array<{ start: number; end: number; text: string }> = [];
@@ -386,19 +343,19 @@ export async function assembleClean(
     const partPath = path.join(workDir, `part-${i}.mp4`);
 
     if (isVideo) {
-      execSync(
+      await run(
         `ffmpeg -ss ${item.start} -accurate_seek -i "${videoPath}" -t ${duration} ` +
           `-c:v libx264 -c:a aac -b:a 128k -ar 44100 -pix_fmt yuv420p ` +
           `-vf "fps=30" -y "${partPath}"`,
-        { timeout: 120000, stdio: "pipe" }
+        { timeoutMs: 120000 }
       );
     } else {
-      execSync(
+      await run(
         `ffmpeg -f lavfi -i "color=c=#1a1a1a:s=1080x1920:d=${duration}:r=30" ` +
           `-ss ${item.start} -i "${videoPath}" -t ${duration} ` +
           `-c:v libx264 -c:a aac -b:a 128k -ar 44100 -pix_fmt yuv420p ` +
           `-shortest -y "${partPath}"`,
-        { timeout: 120000, stdio: "pipe" }
+        { timeoutMs: 120000 }
       );
     }
 
@@ -420,11 +377,11 @@ export async function assembleClean(
   fs.writeFileSync(concatList, partFiles.map((p) => `file '${p}'`).join("\n"));
 
   const outputPath = path.join(outputDir, "clean.mp4");
-  execSync(
+  await run(
     `ffmpeg -f concat -safe 0 -i "${concatList}" ` +
       `-c:v libx264 -c:a aac -b:a 128k -ar 44100 -pix_fmt yuv420p ` +
       `-movflags +faststart -y "${outputPath}"`,
-    { timeout: 300000, stdio: "pipe" }
+    { timeoutMs: 300000 }
   );
 
   // SRT

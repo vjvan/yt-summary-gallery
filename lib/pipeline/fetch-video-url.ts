@@ -3,9 +3,9 @@
  * 支援 1000+ 平台:X/Twitter, TikTok, Bilibili, IG, Vimeo, FB, Threads...
  */
 
-import { execSync } from "child_process";
 import path from "path";
 import fs from "fs";
+import { run } from "./run-command";
 
 export interface VideoUrlMetadata {
   videoPath: string;       // 本機 tmp mp4 完整路徑
@@ -31,7 +31,7 @@ function fmtDuration(sec: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-export function fetchVideoFromUrl(url: string, contentId: string, projectRoot: string): VideoUrlMetadata {
+export async function fetchVideoFromUrl(url: string, contentId: string, projectRoot: string): Promise<VideoUrlMetadata> {
   const ytdlp = resolveYtDlp();
   const tmpDir = path.join(projectRoot, "data", "tmp", contentId);
   fs.mkdirSync(tmpDir, { recursive: true });
@@ -44,11 +44,11 @@ export function fetchVideoFromUrl(url: string, contentId: string, projectRoot: s
   const outputTemplate = path.join(tmpDir, `${contentId}.%(ext)s`);
 
   try {
-    execSync(
+    await run(
       `"${ytdlp}" -f "best[ext=mp4]/best" --no-playlist --write-info-json ` +
         `--merge-output-format mp4 --no-warnings ` +
         `-o "${outputTemplate}" "${url}"`,
-      { timeout: 600000, stdio: "pipe", maxBuffer: 50 * 1024 * 1024 }
+      { timeoutMs: 600000 }
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -94,7 +94,7 @@ export function fetchVideoFromUrl(url: string, contentId: string, projectRoot: s
   if (videoPath.endsWith(".mp4")) {
     fs.copyFileSync(videoPath, publicTarget);
   } else {
-    execSync(`ffmpeg -i "${videoPath}" -c copy -y "${publicTarget}"`, { timeout: 120000, stdio: "pipe" });
+    await run(`ffmpeg -i "${videoPath}" -c copy -y "${publicTarget}"`, { timeoutMs: 120000 });
     // 把 videoPath 也指到 mp4,方便後面 audio 抽取一致
     videoPath = publicTarget;
   }

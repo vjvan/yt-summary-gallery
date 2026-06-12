@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { execSync } from "child_process";
+import { run } from "./run-command";
 import { renderSubtitleBatch } from "./render-subtitle-png";
 import type { CleanTimeline, SubtitleCue } from "./build-clean-timeline";
 
@@ -40,38 +40,38 @@ ${options.subtext ? `<div class="sub">${options.subtext}</div>` : ""}
   return outputPath;
 }
 
-function imageToVideo(imagePath: string, outputPath: string, dur: number): string {
-  execSync(
+async function imageToVideo(imagePath: string, outputPath: string, dur: number): Promise<string> {
+  await run(
     `ffmpeg -loop 1 -i "${imagePath}" -f lavfi -i anullsrc=r=44100:cl=stereo ` +
       `-c:v libx264 -c:a aac -b:a 128k -ar 44100 -t ${dur} ` +
       `-pix_fmt yuv420p -vf "scale=1080:1920:force_original_aspect_ratio=decrease,` +
       `pad=1080:1920:-1:-1:color=black,fps=30" -shortest -y "${outputPath}"`,
-    { timeout: 60000, stdio: "pipe" }
+    { timeoutMs: 60000 }
   );
   return outputPath;
 }
 
-function extractSegment(
+async function extractSegment(
   sourcePath: string, start: number, end: number,
   outputPath: string, isAudioOnly: boolean
-): string {
+): Promise<string> {
   const duration = end - start;
   if (isAudioOnly) {
-    execSync(
+    await run(
       `ffmpeg -f lavfi -i "color=c=#1a1a1a:s=1080x1920:d=${duration}:r=30" ` +
         `-ss ${start} -i "${sourcePath}" -t ${duration} ` +
         `-c:v libx264 -c:a aac -b:a 128k -ar 44100 -pix_fmt yuv420p ` +
         `-shortest -y "${outputPath}"`,
-      { timeout: 120000, stdio: "pipe" }
+      { timeoutMs: 120000 }
     );
   } else {
-    execSync(
+    await run(
       `ffmpeg -ss ${start} -accurate_seek -i "${sourcePath}" -t ${duration} ` +
         `-vf "scale=1080:1920:force_original_aspect_ratio=decrease,` +
         `pad=1080:1920:-1:-1:color=black,fps=30" ` +
         `-c:v libx264 -c:a aac -b:a 128k -ar 44100 -pix_fmt yuv420p ` +
         `-y "${outputPath}"`,
-      { timeout: 120000, stdio: "pipe" }
+      { timeoutMs: 120000 }
     );
   }
   return outputPath;
@@ -80,20 +80,20 @@ function extractSegment(
 /**
  * Verify a video has an audio stream. If not, add silent audio.
  */
-function ensureAudio(videoPath: string): void {
+async function ensureAudio(videoPath: string): Promise<void> {
   try {
-    const probe = execSync(
+    const probe = (await run(
       `ffprobe -v error -select_streams a -show_entries stream=codec_name -of csv=p=0 "${videoPath}"`,
-      { encoding: "utf-8", timeout: 5000 }
-    ).trim();
+      { timeoutMs: 5000 }
+    )).trim();
     if (!probe) {
       console.warn(`[assemble] No audio in ${path.basename(videoPath)}, adding silent track`);
       const tmpPath = videoPath.replace(".mp4", "-noaudio.mp4");
       fs.renameSync(videoPath, tmpPath);
-      execSync(
+      await run(
         `ffmpeg -i "${tmpPath}" -f lavfi -i anullsrc=r=44100:cl=stereo ` +
           `-c:v copy -c:a aac -b:a 128k -ar 44100 -shortest -y "${videoPath}"`,
-        { timeout: 30000, stdio: "pipe" }
+        { timeoutMs: 30000 }
       );
       fs.unlinkSync(tmpPath);
     }
@@ -103,13 +103,13 @@ function ensureAudio(videoPath: string): void {
 /**
  * Overlay a single subtitle PNG onto a video.
  */
-function overlaySubtitle(videoPath: string, pngPath: string, outputPath: string): string {
-  execSync(
+async function overlaySubtitle(videoPath: string, pngPath: string, outputPath: string): Promise<string> {
+  await run(
     `ffmpeg -i "${videoPath}" -i "${pngPath}" ` +
       `-filter_complex "[1:v]format=rgba[sub];[0:v][sub]overlay=0:1640:format=auto[vout]" ` +
       `-map "[vout]" -map 0:a -c:v libx264 -c:a aac -b:a 128k -ar 44100 ` +
       `-pix_fmt yuv420p -y "${outputPath}"`,
-    { timeout: 120000, stdio: "pipe" }
+    { timeoutMs: 120000 }
   );
   return outputPath;
 }
@@ -137,7 +137,7 @@ export async function assembleVideo(
   // Title card
   console.log("[assemble] Generating title card...");
   const titleImg = await generateTextCard(timeline.hook, path.join(workDir, "title.png"));
-  const titleVideo = imageToVideo(titleImg, path.join(workDir, `raw-${partIndex}.mp4`), 3);
+  const titleVideo = await imageToVideo(titleImg, path.join(workDir, `raw-${partIndex}.mp4`), 3);
   rawParts.push(titleVideo);
   segmentDurations.push(3);
   subtitleCues.push({ text: timeline.hook, video_start: 0, video_end: 3 });
@@ -160,8 +160,8 @@ export async function assembleVideo(
     console.log(`[assemble] Extract ${i + 1}/${timeline.segments.length}: ${start}s-${end}s (${segDuration.toFixed(1)}s)`);
 
     const rawPath = path.join(workDir, `raw-${partIndex}.mp4`);
-    extractSegment(clip.file_path, start, end, rawPath, isAudioOnly);
-    ensureAudio(rawPath); // safety: guarantee audio stream exists
+    await extractSegment(clip.file_path, start, end, rawPath, isAudioOnly);
+    await ensureAudio(rawPath); // safety: guarantee audio stream exists
 
     rawParts.push(rawPath);
     segmentDurations.push(segDuration);
@@ -171,7 +171,7 @@ export async function assembleVideo(
   // CTA card
   console.log("[assemble] Generating CTA card...");
   const ctaImg = await generateTextCard(timeline.cta, path.join(workDir, "cta.png"));
-  const ctaVideo = imageToVideo(ctaImg, path.join(workDir, `raw-${partIndex}.mp4`), 3);
+  const ctaVideo = await imageToVideo(ctaImg, path.join(workDir, `raw-${partIndex}.mp4`), 3);
   rawParts.push(ctaVideo);
   segmentDurations.push(3);
 
@@ -185,11 +185,11 @@ export async function assembleVideo(
   fs.writeFileSync(concatListPath, rawParts.map((p) => `file '${p}'`).join("\n"));
 
   const concatPath = path.join(workDir, "concat-raw.mp4");
-  execSync(
+  await run(
     `ffmpeg -f concat -safe 0 -i "${concatListPath}" ` +
       `-c:v libx264 -c:a aac -b:a 128k -ar 44100 -pix_fmt yuv420p ` +
       `-movflags +faststart -y "${concatPath}"`,
-    { timeout: 300000, stdio: "pipe" }
+    { timeoutMs: 300000 }
   );
 
   // === PHASE 3: Overlay subtitles one segment at a time ===
@@ -253,12 +253,12 @@ export async function assembleVideo(
 
     console.log(`[assemble] Overlay batch ${Math.floor(batch / BATCH_SIZE) + 1}/${Math.ceil(overlaySpecs.length / BATCH_SIZE)}...`);
 
-    execSync(
+    await run(
       `ffmpeg -i "${currentVideo}" ${inputs} ` +
         `-filter_complex "${filterChain}" ` +
         `-map "[vout]" -map 0:a -c:v libx264 -c:a aac -b:a 128k -ar 44100 ` +
         `-pix_fmt yuv420p -movflags +faststart -y "${batchOutput}"`,
-      { timeout: 300000, stdio: "pipe" }
+      { timeoutMs: 300000 }
     );
 
     currentVideo = batchOutput;

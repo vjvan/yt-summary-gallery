@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { extractSummary } from "@/lib/pipeline/extract-summary";
+import { extractSummaryVerified } from "@/lib/pipeline/extract-summary";
 import { renderCard } from "@/lib/pipeline/render-card";
 import { translateSegments, translatePlainText } from "@/lib/pipeline/translate";
 import { writeSubtitleFiles } from "@/lib/pipeline/burn-bilingual";
 import { runVideoPipeline } from "@/lib/pipeline/run-video-pipeline";
-import type { TranscriptSegment } from "@/lib/pipeline/fetch-transcript";
+import { transcribeAudio, probeDuration } from "@/lib/pipeline/transcribe";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { execSync } from "child_process";
 
 const AUDIO_EXTS = ["mp3", "m4a", "wav", "ogg", "opus", "aac", "flac"];
 const VIDEO_EXTS = ["mp4", "mov", "mkv", "webm", "m4v", "avi"];
@@ -104,44 +103,10 @@ async function runAudioPipeline(id: string, contentId: string, audioPath: string
   const tmpDir = path.dirname(audioPath);
   const cardDir = path.join(process.cwd(), "public", "cards", contentId);
 
-  let finalAudio = audioPath;
-  if (fs.statSync(audioPath).size > 25 * 1024 * 1024) {
-    const compressed = path.join(tmpDir, "compressed.mp3");
-    execSync(`ffmpeg -i "${audioPath}" -b:a 64k -ar 16000 -y "${compressed}"`, {
-      timeout: 300000, stdio: "pipe",
-    });
-    finalAudio = compressed;
-  }
+  const duration = await probeDuration(audioPath);
 
-  let duration = 0;
-  try {
-    const probe = execSync(
-      `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${finalAudio}"`,
-      { encoding: "utf-8", timeout: 10000 }
-    ).trim();
-    duration = parseFloat(probe) || 0;
-  } catch { /* ignore */ }
-
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY not set");
-
-  const result = execSync(
-    `curl -s -X POST "https://api.openai.com/v1/audio/transcriptions" ` +
-      `-H "Authorization: Bearer ${apiKey}" ` +
-      `-F "file=@${finalAudio}" ` +
-      `-F "model=whisper-1" ` +
-      `-F "response_format=verbose_json" ` +
-      `--max-time 600`,
-    { encoding: "utf-8", timeout: 620000 }
-  );
-
-  const data = JSON.parse(result);
-  const segments: TranscriptSegment[] = (data.segments || []).map(
-    (s: { start: number; end: number; text: string }) => ({
-      start: s.start, end: s.end, text: s.text.trim(),
-    })
-  );
-  const transcript = data.text || segments.map((s) => s.text).join(" ");
+  // 壓縮 / 25MB 切段 / 上傳都在 transcribeAudio 內處理(非阻塞,不再凍住 event loop)
+  const { text: transcript, segments } = await transcribeAudio(audioPath, { tmpDir });
 
   const { translated: segmentsZh, wasTranslated } = await translateSegments(segments);
   const transcriptZh = wasTranslated ? translatePlainText(segmentsZh) : null;
@@ -181,7 +146,7 @@ async function runAudioPipeline(id: string, contentId: string, audioPath: string
       }).join("\n")
     : (transcriptZh || transcript);
 
-  const summary = await extractSummary(timestamped, title, "Podcast");
+  const summary = await extractSummaryVerified(timestamped, title, "Podcast", duration);
 
   const metadata = {
     video_id: contentId, title, channel: "Podcast",

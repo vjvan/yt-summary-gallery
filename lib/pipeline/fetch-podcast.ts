@@ -1,8 +1,9 @@
-import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import type { TranscriptSegment, VideoMetadata, TranscriptResult } from "./fetch-transcript";
+import type { VideoMetadata, TranscriptResult } from "./fetch-transcript";
+import { run } from "./run-command";
+import { transcribeAudio, probeDuration } from "./transcribe";
 
 /**
  * Detect if a URL is a podcast (not YouTube)
@@ -30,7 +31,7 @@ export function extractPodcastId(url: string): string {
 /**
  * Fetch podcast audio and transcribe with Whisper
  */
-export function fetchPodcast(url: string, tmpDir: string): TranscriptResult {
+export async function fetchPodcast(url: string, tmpDir: string): Promise<TranscriptResult> {
   fs.mkdirSync(tmpDir, { recursive: true });
 
   const isDirectAudio = /\.(mp3|m4a|wav|ogg|opus|aac)(\?|$)/i.test(url);
@@ -42,14 +43,14 @@ export function fetchPodcast(url: string, tmpDir: string): TranscriptResult {
   if (isDirectAudio) {
     // Direct audio URL: download with curl
     audioPath = path.join(tmpDir, "audio.mp3");
-    execSync(`curl -L -o "${audioPath}" "${url}"`, { timeout: 300000, stdio: "pipe" });
+    await run(`curl -L -o "${audioPath}" "${url}"`, { timeoutMs: 300000 });
     title = path.basename(new URL(url).pathname).replace(/\.[^.]+$/, "").replace(/[-_]/g, " ");
   } else if (/spotify\.com/i.test(url)) {
     // Spotify: DRM protected, cannot download audio
     // Try to get metadata via oEmbed
     try {
       const oembedUrl = `https://open.spotify.com/oembed?url=${encodeURIComponent(url)}`;
-      const oembed = execSync(`curl -s "${oembedUrl}"`, { encoding: "utf-8", timeout: 10000 });
+      const oembed = await run(`curl -s "${oembedUrl}"`, { timeoutMs: 10000 });
       const info = JSON.parse(oembed);
       title = info.title || "";
       channel = info.provider_name || "Spotify Podcast";
@@ -67,10 +68,8 @@ export function fetchPodcast(url: string, tmpDir: string): TranscriptResult {
     // Other podcast platforms: try yt-dlp
     audioPath = path.join(tmpDir, "audio");
     try {
-      const infoRaw = execSync(`yt-dlp --dump-json --skip-download "${url}"`, {
-        timeout: 60000,
-        encoding: "utf-8",
-        stdio: ["pipe", "pipe", "pipe"],
+      const infoRaw = await run(`yt-dlp --dump-json --skip-download "${url}"`, {
+        timeoutMs: 60000,
       });
       const info = JSON.parse(infoRaw);
       title = info.title || "";
@@ -81,9 +80,9 @@ export function fetchPodcast(url: string, tmpDir: string): TranscriptResult {
     }
 
     try {
-      execSync(
+      await run(
         `yt-dlp -x --audio-format mp3 --audio-quality 5 -o "${audioPath}.%(ext)s" "${url}"`,
-        { timeout: 300000, stdio: "pipe" }
+        { timeoutMs: 300000 }
       );
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
@@ -105,55 +104,17 @@ export function fetchPodcast(url: string, tmpDir: string): TranscriptResult {
   const stat = fs.statSync(audioPath);
   if (stat.size < 1000) throw new Error("Downloaded file too small, likely not audio");
 
-  // Compress if over 25MB
-  if (stat.size > 25 * 1024 * 1024) {
-    const compressed = path.join(tmpDir, "compressed.mp3");
-    execSync(`ffmpeg -i "${audioPath}" -b:a 64k -ar 16000 -y "${compressed}"`, {
-      timeout: 300000,
-      stdio: "pipe",
-    });
-    audioPath = compressed;
-  }
-
   // Get duration from audio if not available
   if (!duration) {
-    try {
-      const probe = execSync(
-        `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${audioPath}"`,
-        { encoding: "utf-8", timeout: 10000 }
-      ).trim();
-      duration = parseFloat(probe) || 0;
-    } catch {
-      // ignore
-    }
+    duration = await probeDuration(audioPath);
   }
 
   const mins = Math.floor(duration / 60);
   const secs = Math.floor(duration % 60);
 
-  // Whisper transcription with timestamps
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY not set");
-
-  const result = execSync(
-    `curl -s -X POST "https://api.openai.com/v1/audio/transcriptions" ` +
-      `-H "Authorization: Bearer ${apiKey}" ` +
-      `-F "file=@${audioPath}" ` +
-      `-F "model=whisper-1" ` +
-      `-F "language=zh" ` +
-      `-F "response_format=verbose_json" ` +
-      `--max-time 600`,
-    { encoding: "utf-8", timeout: 620000 }
-  );
-
-  const data = JSON.parse(result);
-  const segments: TranscriptSegment[] = (data.segments || []).map(
-    (s: { start: number; end: number; text: string }) => ({
-      start: s.start,
-      end: s.end,
-      text: s.text.trim(),
-    })
-  );
+  // Whisper transcription with timestamps。
+  // 壓縮 / 25MB 切段都在 transcribeAudio 內處理;語言自動偵測(英文 podcast 不再被硬轉中文)。
+  const { text, segments } = await transcribeAudio(audioPath, { tmpDir });
 
   const metadata: VideoMetadata = {
     video_id: extractPodcastId(url),
@@ -169,7 +130,7 @@ export function fetchPodcast(url: string, tmpDir: string): TranscriptResult {
 
   return {
     metadata,
-    transcript: data.text || segments.map(s => s.text).join(" "),
+    transcript: text || segments.map(s => s.text).join(" "),
     segments,
   };
 }

@@ -5,15 +5,13 @@
  * 不包含燒字幕(那是 on-demand /burn endpoint 的責任)。
  */
 
-import fs from "fs";
 import path from "path";
-import { execSync } from "child_process";
 import { getDb } from "@/lib/db";
-import { extractSummary } from "@/lib/pipeline/extract-summary";
+import { extractSummaryVerified } from "@/lib/pipeline/extract-summary";
 import { renderCard } from "@/lib/pipeline/render-card";
 import { translateSegments, translatePlainText } from "@/lib/pipeline/translate";
 import { writeSubtitleFiles, extractAudioFromVideo } from "@/lib/pipeline/burn-bilingual";
-import type { TranscriptSegment } from "@/lib/pipeline/fetch-transcript";
+import { transcribeAudio, probeDuration } from "@/lib/pipeline/transcribe";
 
 export interface VideoPipelineInput {
   id: string;             // summaries.id (uuid)
@@ -36,52 +34,15 @@ export async function runVideoPipeline(input: VideoPipelineInput): Promise<void>
   const cardDir = path.join(projectRoot, "public", "cards", contentId);
 
   // Step 1: 影片抽純音軌 mp3 給 Whisper(64k 16kHz mono,大幅縮小)
-  let audioForWhisper = path.join(tmpDir, `${contentId}.audio.mp3`);
-  extractAudioFromVideo(videoPath, audioForWhisper);
-
-  // 若超過 25MB 再壓一次(Whisper 上限)
-  if (fs.statSync(audioForWhisper).size > 25 * 1024 * 1024) {
-    const compressed = path.join(tmpDir, "compressed.mp3");
-    execSync(`ffmpeg -i "${audioForWhisper}" -b:a 48k -ar 16000 -ac 1 -y "${compressed}"`, {
-      timeout: 600000, stdio: "pipe",
-    });
-    audioForWhisper = compressed;
-  }
+  const audioForWhisper = path.join(tmpDir, `${contentId}.audio.mp3`);
+  await extractAudioFromVideo(videoPath, audioForWhisper);
 
   // Step 2: 取 duration(從原始 video,比 audio 更可靠)
-  let duration = input.duration || 0;
-  if (!duration) {
-    try {
-      const probe = execSync(
-        `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${videoPath}"`,
-        { encoding: "utf-8", timeout: 10000 }
-      ).trim();
-      duration = parseFloat(probe) || 0;
-    } catch { /* ignore */ }
-  }
+  const duration = input.duration || (await probeDuration(videoPath));
   const durationDisplay = `${Math.floor(duration / 60)}:${pad(Math.floor(duration % 60))}`;
 
-  // Step 3: Whisper transcription
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY not set");
-
-  const result = execSync(
-    `curl -s -X POST "https://api.openai.com/v1/audio/transcriptions" ` +
-      `-H "Authorization: Bearer ${apiKey}" ` +
-      `-F "file=@${audioForWhisper}" ` +
-      `-F "model=whisper-1" ` +
-      `-F "response_format=verbose_json" ` +
-      `--max-time 1800`,
-    { encoding: "utf-8", timeout: 1820000, maxBuffer: 50 * 1024 * 1024 }
-  );
-
-  const data = JSON.parse(result);
-  const segments: TranscriptSegment[] = (data.segments || []).map(
-    (s: { start: number; end: number; text: string }) => ({
-      start: s.start, end: s.end, text: s.text.trim(),
-    })
-  );
-  const transcript = data.text || segments.map((s) => s.text).join(" ");
+  // Step 3: Whisper transcription(壓縮 / 25MB 切段都在 transcribeAudio 內處理)
+  const { text: transcript, segments } = await transcribeAudio(audioForWhisper, { tmpDir });
 
   // Step 4: Translate (English → 繁中, 簡體 → 繁體)
   const { translated: segmentsZh, wasTranslated } = await translateSegments(segments);
@@ -130,7 +91,7 @@ export async function runVideoPipeline(input: VideoPipelineInput): Promise<void>
       }).join("\n")
     : (transcriptZh || transcript);
 
-  const summary = await extractSummary(timestamped, title, input.channel || "Video");
+  const summary = await extractSummaryVerified(timestamped, title, input.channel || "Video", duration);
 
   // Step 7: Render carousel
   const metadata = {

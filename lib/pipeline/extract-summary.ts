@@ -199,6 +199,34 @@ export async function extractSummary(
 }
 
 /**
+ * extractSummary + highlights 時間戳自動驗證。
+ *
+ * GPT 首次萃取常把 highlights 全擠在影片開頭(誤判時間戳單位),
+ * 以前要靠使用者手動打 regenerate-highlights 補救。
+ * 這裡在首次生成後就用 highlightsLookBroken() 檢查,爛的話立刻重產一次。
+ * 修不好就保留原樣,不擋整個 pipeline。
+ */
+export async function extractSummaryVerified(
+  transcriptWithTimestamps: string,
+  videoTitle: string,
+  channel: string,
+  durationSec: number
+): Promise<Summary> {
+  const summary = await extractSummary(transcriptWithTimestamps, videoTitle, channel);
+  if (durationSec > 0 && highlightsLookBroken(summary.highlights, durationSec)) {
+    try {
+      const fixed = await regenerateHighlights(
+        transcriptWithTimestamps, videoTitle, channel, durationSec
+      );
+      if (fixed.length >= 3) summary.highlights = fixed;
+    } catch (err) {
+      console.warn("[extract-summary] highlights 自動修正失敗,保留原版:", err);
+    }
+  }
+  return summary;
+}
+
+/**
  * Lazy upgrade: 給只有舊欄位的 summary 補新 4 欄位 (tldr_paragraph / pitfalls / recall_questions / video_genre)。
  *
  * 不重新計算既有的 title_display / key_points / highlights 等,只請 GPT 回傳缺的部分,

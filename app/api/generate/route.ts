@@ -4,7 +4,7 @@ import { fetchTranscript } from "@/lib/pipeline/fetch-transcript";
 import { fetchPodcast } from "@/lib/pipeline/fetch-podcast";
 import { fetchVideoFromUrl } from "@/lib/pipeline/fetch-video-url";
 import { detectSource, extractId } from "@/lib/pipeline/detect-source";
-import { extractSummary } from "@/lib/pipeline/extract-summary";
+import { extractSummaryVerified } from "@/lib/pipeline/extract-summary";
 import { renderCard } from "@/lib/pipeline/render-card";
 import { translateSegments, translatePlainText } from "@/lib/pipeline/translate";
 import { writeSubtitleFiles } from "@/lib/pipeline/burn-bilingual";
@@ -78,7 +78,7 @@ async function runVideoUrlPipeline(id: string, url: string, contentId: string) {
   const db = getDb();
   const projectRoot = process.cwd();
 
-  const meta = fetchVideoFromUrl(url, contentId, projectRoot);
+  const meta = await fetchVideoFromUrl(url, contentId, projectRoot);
 
   // 立刻把 video_url 寫進 DB,讓前端 player 可預覽(即使字幕還沒好)
   db.prepare(
@@ -105,9 +105,9 @@ async function runYoutubeOrPodcastPipeline(id: string, url: string, contentId: s
 
   let result: TranscriptResult;
   if (source === "youtube") {
-    result = fetchTranscript(url, tmpDir);
+    result = await fetchTranscript(url, tmpDir);
   } else {
-    result = fetchPodcast(url, tmpDir);
+    result = await fetchPodcast(url, tmpDir);
   }
   const { metadata, transcript, segments } = result;
 
@@ -152,7 +152,9 @@ async function runYoutubeOrPodcastPipeline(id: string, url: string, contentId: s
       }).join("\n")
     : (transcriptZh || transcript);
 
-  const summary = await extractSummary(timestampedTranscript, metadata.title, metadata.channel);
+  const summary = await extractSummaryVerified(
+    timestampedTranscript, metadata.title, metadata.channel, metadata.duration
+  );
 
   const slidePaths = await renderCard(summary, metadata, cardDir);
   const publicPaths = slidePaths.map((_, i) => `/cards/${contentId}/slide-${i + 1}.png`);
