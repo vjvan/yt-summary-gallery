@@ -118,6 +118,23 @@ export function getDb() {
     `);
     db.exec(`CREATE INDEX IF NOT EXISTS idx_annotations_video ON annotations(video_id, timestamp)`);
 
+    // AIVAN Creator Studio 草稿版本：append-only，避免修改 summaries 的 AI 原稿。
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS aivan_project_versions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        summary_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        project_json TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(summary_id, revision)
+      )
+    `);
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_aivan_project_versions_latest
+      ON aivan_project_versions(summary_id, revision DESC)
+    `);
+
     // Layer 7 護城河: is_featured 欄位給 curated 公開頁用
     addCol("is_featured", "INTEGER DEFAULT 0");
     addCol("featured_note", "TEXT"); // 允雷對這支影片的個人推薦理由
@@ -142,6 +159,15 @@ export interface AnnotationRow {
   body: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface AivanProjectVersionRow {
+  id: number;
+  summary_id: string;
+  project_id: string;
+  revision: number;
+  project_json: string;
+  created_at: string;
 }
 
 export interface SummaryRow {

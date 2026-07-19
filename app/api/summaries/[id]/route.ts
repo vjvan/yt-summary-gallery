@@ -57,6 +57,7 @@ export async function DELETE(
     if (url && url.startsWith("/")) rmrf(path.join(publicDir, url.replace(/^\//, "")));
   }
 
+  db.prepare("DELETE FROM aivan_project_versions WHERE summary_id = ?").run(row.id);
   db.prepare("DELETE FROM summaries WHERE id = ?").run(row.id);
   return NextResponse.json({ ok: true });
 }

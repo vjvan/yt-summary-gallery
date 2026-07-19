@@ -262,6 +262,19 @@ export default function CardDetailPage() {
     }, 3000);
   }
 
+  function handleOpenInAivanStudio() {
+    const projectUrl = new URL(`/api/summaries/${id}/aivan-project`, window.location.origin);
+    if (includeRecall) projectUrl.searchParams.set("recall", "1");
+
+    const studioBase =
+      process.env.NEXT_PUBLIC_AIVAN_SLIDE_STUDIO_URL || "http://127.0.0.1:8765/";
+    const studioUrl = new URL(studioBase);
+    studioUrl.searchParams.set("project", projectUrl.href);
+    studioUrl.searchParams.set("view", "gallery");
+    studioUrl.searchParams.set("source", "yt-summary");
+    window.open(studioUrl.href, "_blank", "noopener,noreferrer");
+  }
+
   return (
     <main className="min-h-screen bg-gray-50">
       <div className={view === "transcript" ? "max-w-[1600px] mx-auto px-6 py-6" : "max-w-7xl mx-auto px-4 py-8"}>
@@ -439,7 +452,7 @@ export default function CardDetailPage() {
                       &rarr;
                     </button>
                   </div>
-                  <div className="flex gap-3 mt-4">
+                  <div className="flex flex-wrap gap-3 mt-4">
                     <a
                       href={cardPaths[currentSlide]}
                       download={`slide-${currentSlide + 1}.png`}
@@ -462,8 +475,16 @@ export default function CardDetailPage() {
                       title="開啟可編輯版卡片:點文字直接改、換主題、單張/全部匯出 PNG、下載成獨立 HTML 檔"
                       className="px-4 py-3 text-center font-bold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors"
                     >
-                      編輯卡片
+                      快速編輯
                     </a>
+                    <button
+                      type="button"
+                      onClick={handleOpenInAivanStudio}
+                      title="把來源、摘要與原卡片視覺一起送進 AIVAN Slide Studio，多頁總覽後逐張編輯"
+                      className="px-4 py-3 text-center font-bold text-white bg-slate-900 rounded-lg hover:bg-slate-700 transition-colors"
+                    >
+                      在 AIVAN Studio 編輯
+                    </button>
                     {segments.length > 0 && (
                       <a
                         href={`/api/summaries/${id}/srt`}
