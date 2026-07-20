@@ -26,6 +26,7 @@ export default function CardDetailPage() {
   const [includeRecall, setIncludeRecall] = useLocalStorage<boolean>("yt_include_recall", false);
   const [featuredSaving, setFeaturedSaving] = useState(false);
   const [regeneratingHighlights, setRegeneratingHighlights] = useState(false);
+  const [openingAivanStudio, setOpeningAivanStudio] = useState(false);
   const [playerCurrentTime, setPlayerCurrentTime] = useState(0);
   const playerSeekRef = useRef<((s: number) => void) | null>(null);
   const burnPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -262,17 +263,39 @@ export default function CardDetailPage() {
     }, 3000);
   }
 
-  function handleOpenInAivanStudio() {
-    const projectUrl = new URL(`/api/summaries/${id}/aivan-project`, window.location.origin);
-    if (includeRecall) projectUrl.searchParams.set("recall", "1");
+  async function handleOpenInAivanStudio() {
+    if (openingAivanStudio) return;
+    setOpeningAivanStudio(true);
+    const studioWindow = window.open("about:blank", "_blank");
 
-    const studioBase =
-      process.env.NEXT_PUBLIC_AIVAN_SLIDE_STUDIO_URL || "http://127.0.0.1:8765/";
-    const studioUrl = new URL(studioBase);
-    studioUrl.searchParams.set("project", projectUrl.href);
-    studioUrl.searchParams.set("view", "gallery");
-    studioUrl.searchParams.set("source", "yt-summary");
-    window.open(studioUrl.href, "_blank", "noopener,noreferrer");
+    try {
+      const linkUrl = new URL(`/api/summaries/${id}/aivan-cloud-link`, window.location.origin);
+      if (includeRecall) linkUrl.searchParams.set("recall", "1");
+      const linkResponse = await fetch(linkUrl, { cache: "no-store" });
+      const link = await linkResponse.json().catch(() => ({}));
+      if (!linkResponse.ok || !link.projectUrl) {
+        throw new Error(link.error || `雲端 Project JSON 同步失敗：HTTP ${linkResponse.status}`);
+      }
+
+      const studioBase =
+        process.env.NEXT_PUBLIC_AIVAN_SLIDE_STUDIO_URL || "http://127.0.0.1:8765/";
+      const studioUrl = new URL(studioBase);
+      studioUrl.searchParams.set("project", link.projectUrl);
+      studioUrl.searchParams.set("view", "gallery");
+      studioUrl.searchParams.set("source", "yt-summary-cloud");
+
+      if (studioWindow) {
+        studioWindow.opener = null;
+        studioWindow.location.replace(studioUrl.href);
+      } else {
+        window.open(studioUrl.href, "_blank", "noopener,noreferrer");
+      }
+    } catch (error) {
+      studioWindow?.close();
+      alert(error instanceof Error ? error.message : "無法開啟 AIVAN Studio");
+    } finally {
+      setOpeningAivanStudio(false);
+    }
   }
 
   return (
@@ -480,10 +503,11 @@ export default function CardDetailPage() {
                     <button
                       type="button"
                       onClick={handleOpenInAivanStudio}
-                      title="把來源、摘要與原卡片視覺一起送進 AIVAN Slide Studio，多頁總覽後逐張編輯"
-                      className="px-4 py-3 text-center font-bold text-white bg-slate-900 rounded-lg hover:bg-slate-700 transition-colors"
+                      disabled={openingAivanStudio}
+                      title="先把 Project JSON 安全同步到雲端，再送進 AIVAN Slide Studio 編輯"
+                      className="px-4 py-3 text-center font-bold text-white bg-slate-900 rounded-lg hover:bg-slate-700 transition-colors disabled:opacity-50"
                     >
-                      在 AIVAN Studio 編輯
+                      {openingAivanStudio ? "正在同步雲端……" : "在 AIVAN Studio 編輯"}
                     </button>
                     {segments.length > 0 && (
                       <a
