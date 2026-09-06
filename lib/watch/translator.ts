@@ -5,7 +5,7 @@ import { watchProviderInfo } from './provider';
 import { requestLocalCue, repeatedNameSourceFragments, requestLocalRepeatedNameRepair, untranslatedLocalWords, missingSourceNumbers } from './local-cue-translator';
 import { prepareProtectedCue, requiredProtectedTerms, missingProtectedTerms, protectedNamesOnlyText } from './protected-terms';
 import { normalizeTaiwanSubtitle } from './taiwan-terminology';
-import { speakerNames, withSpeakerNames, withoutSpeakerNames } from './speaker-names';
+import { softSpeakerNames, withSpeakerNames, withoutSpeakerNames } from './speaker-names';
 // @ts-expect-error opencc-js does not ship TypeScript declarations.
 import * as OpenCC from 'opencc-js';
 // Character conversion only. OpenCC's phrase table (twp) was measured on 1279
@@ -115,7 +115,7 @@ export async function translateWatchWindow(input: TranslateWatchWindowInput): Pr
     } : input.glossary);
     // Speaker labels are best-effort keep terms: the user's own glossary names
     // stay mandatory, a transliterated speaker after one repair is still a subtitle.
-    const softNames = new Set(speakerNames(input.source));
+    const softNames = softSpeakerNames(input.source, input.glossary);
     const hardTerms = (terms: string[]) => terms.filter(term => !softNames.has(term));
     const translated: TranslatedCue[] = [];
     let activeCue: WatchCue | undefined;
@@ -149,7 +149,7 @@ export async function translateWatchWindow(input: TranslateWatchWindowInput): Pr
         if ((!languageNeutral && (!/[\u3400-\u9fff]/.test(text) || untranslated.length > 0)) || missing.length > 0 || missingNumbers.length > 0) {
           batchSignal.throwIfAborted();
           // Structured fragment repair is reserved for the user's repeated names; it splits only at those, so a speaker label cannot make it fail.
-          const hardGlossary = withoutSpeakerNames(input.source, prepared.glossary);
+          const hardGlossary = withoutSpeakerNames(softNames, prepared.glossary);
           const repeated = hardTerms(missing).some(term => protectedTerms.filter(name => name === term).length > 1)
             ? repeatedNameSourceFragments(prepared.cue, hardGlossary) : null;
           text = repeated

@@ -4,8 +4,8 @@ import type { Glossary } from '../glossary-defaults';
 // Traditional forms a Mainland-trained model still emits. OpenCC's phrase table
 // was rejected: on 1279 public cues it also rewrote ordinary words (連接→連線).
 // Single characters (挺, 搞), shared words (數據, 優化, 支持, 實現) and words whose
-// Taiwan meaning differs by context (文件, 菜單, 終端, 循環, 對象, 項目 = item) are
-// deliberately absent; those belong to prompt style rules, not to a blind rewrite.
+// Taiwan meaning differs by context (文件, 菜單, 終端, 循環, 對象, 項目 = item, 推理, bare 智能)
+// are deliberately absent; those belong to prompt style rules, not to a blind rewrite.
 const SAFE_TERMS: Readonly<Record<string, string>> = {
   // media
   '視頻通話': '視訊通話', '視頻會議': '視訊會議', '視頻': '影片', '音頻': '音訊', '圖像生成': '影像生成', '截屏': '截圖', '分辨率': '解析度', '攝像頭': '攝影機',
@@ -17,9 +17,9 @@ const SAFE_TERMS: Readonly<Record<string, string>> = {
   '信息': '訊息', '短信': '簡訊', '郵箱': '信箱', '鏈接': '連結', '文檔': '文件', '質量': '品質', '性能': '效能', '兼容': '相容',
   // engineering
   '網絡': '網路', '算法': '演算法', '雲計算': '雲端運算', '源代碼': '原始碼', '代碼': '程式碼', '調用': '呼叫', '字段': '欄位', '數組': '陣列', '隊列': '佇列',
-  '線程': '執行緒', '變量': '變數', '函數': '函式', '布爾': '布林', '字符串': '字串', '字符': '字元', '命令行': '命令列', '存儲': '儲存', '推理': '推論',
-  // AI
-  '智能': '智慧',
+  '線程': '執行緒', '變量': '變數', '函數': '函式', '布爾': '布林', '字符串': '字串', '字符': '字元', '命令行': '命令列', '存儲': '儲存',
+  // AI (narrow phrases only: bare 智能 would also hit 智能障礙, and 推理 is right for 推理小說)
+  '人工智能': '人工智慧', '智能手機': '智慧型手機', '智能體': '智慧體', '智能助理': '智慧助理',
   // speech
   '伙計': '老兄', '夥計': '老兄', '哥們': '兄弟', '播客': 'Podcast',
 };

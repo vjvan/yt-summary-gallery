@@ -21,6 +21,8 @@ const cues: WatchCue[] = [
   { id: 'f', start: 611.0, end: 615.0, text: 'Game Boy Camera (10:11) is not a person.' },
   { id: 'g', start: 194.9, end: 202.6, text: 'The short is Higgsfield gonna Higgsfield. So Rory Flynn (03:19) Yes. But other than that,' },
   { id: 'h', start: 300.0, end: 304.0, text: 'and then So Rory Flynn (05:00) said it again.' },
+  { id: 'i', start: 100.0, end: 104.0, text: 'Click Open Settings (10:11) as shown in the chapter list.' },
+  { id: 'j', start: 500.0, end: 504.0, text: 'Again, Open Settings (10:11) is a chapter, not a person.' },
 ];
 const source: WatchSource = { videoId: 'N-tmQ_Can_o', title: 'Public podcast fixture', language: 'en', sourceKind: 'manual', trackId: 'taiwan-register-fixture', cues };
 const envelope = (text: string) => Response.json({ done: true, done_reason: 'stop', message: { content: JSON.stringify({ text }) } });
@@ -40,6 +42,8 @@ async function mockLocal(fetcher: typeof fetch, run: () => Promise<void>) {
 test('speaker labels observed at least twice become session keep terms without touching the user glossary', () => {
   assert.deepEqual(speakerNames(source), ['Rory Flynn', 'Drew Brucker'], 'a single Game Boy Camera label is not a speaker, and "So Rory Flynn" folds into Rory Flynn');
   assert.deepEqual(speakerNames({ cues: [cues[6], cues[7]] }), ['Rory Flynn'], 'a capitalized sentence opener is never part of the name');
+  assert.deepEqual(speakerNames({ cues: [cues[8], cues[9]] }), [], 'a repeated label whose clock lies outside its cue is a chapter or UI label, not a speaker');
+  assert.deepEqual(speakerNames({ cues: [{ ...cues[0], start: 900, end: 904 }, { ...cues[0], id: 'a2', start: 950, end: 954 }] }), [], 'the clock must fall inside the cue that carries the label');
   const withNames = withSpeakerNames(source, glossary);
   assert.deepEqual(withNames.no_translate_terms, ['Rory Flynn', 'Drew Brucker', 'Flux']);
   assert.deepEqual(glossary.no_translate_terms, ['Flux'], 'input glossary is not mutated');
@@ -71,6 +75,26 @@ test('missing source numbers are detected digit-for-digit, including percent sig
   assert.deepEqual(missingSourceNumbers('Drew Brucker（27:13）對。', cues[0]), []);
   assert.deepEqual(missingSourceNumbers('Drew Brucker 對。', cues[0]), ['27:13']);
   assert.deepEqual(missingSourceNumbers('理解其中的 ９０％', cues[2]), [], 'full-width digits are normalized before comparison');
+  assert.deepEqual(missingSourceNumbers('理解其中的 190%', cues[2]), ['90%'], 'a longer number does not satisfy a shorter one');
+  assert.deepEqual(missingSourceNumbers('2023 年的電影', { text: '2023, 2023 movie.' }), ['2023'], 'a number said twice must appear twice');
+  assert.deepEqual(missingSourceNumbers('2023 年，2023 年的電影', { text: '2023, 2023 movie.' }), []);
+});
+
+test('a user keep term that also labels speech stays mandatory, and a label-only cue is kept without inference', async () => {
+  const userGlossary: Glossary = { ...glossary, no_translate_terms: ['Rory Flynn', 'Flux'] };
+  let calls = 0;
+  await mockLocal(async () => { calls++; return envelope('因為我們剛好在這段小連勝中，羅瑞．Flynn（00:18）這是連勝。'); }, async () => {
+    await assert.rejects(translateWatchWindow({ source, targets: [cues[1]], before: [], after: [], glossary: userGlossary }), { code: 'LOCAL_TRANSLATION_QUALITY' });
+    assert.equal(calls, 2, 'the user-listed name is repaired once and then rejected like any keep term');
+  });
+  calls = 0;
+  const label: WatchCue = { id: 'label', start: 18.0, end: 19.2, text: 'Rory Flynn (00:18)' };
+  await mockLocal(async () => { calls++; return envelope('Rory Flynn（00:18）'); }, async () => {
+    const result = await translateWatchWindow({ source, targets: [label], before: [], after: [], glossary });
+    assert.equal(calls, 0, 'nothing to translate: no model call');
+    assert.equal(result[0].text, 'Rory Flynn (00:18)');
+    assert.equal(result[0].originalText, label.text);
+  });
 });
 
 test('a lost number uses the single repair with a number-specific instruction, and a second miss does not stall the batch', async () => {

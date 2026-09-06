@@ -124,6 +124,8 @@ export function protectedNamesOnlyText(cue: WatchCue, glossary: Glossary): strin
     offset = metadata[0].length;
   }
   const body = text.slice(offset);
+  // A cue that is nothing but its own speaker label needs no language generation.
+  if (metadata && !body.trim()) return text;
   const occurrences = protectedTermOccurrences({ ...cue, text: body }, glossary);
   if (!occurrences.length) return null;
   let remaining = body;

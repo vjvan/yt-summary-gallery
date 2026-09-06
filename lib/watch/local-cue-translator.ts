@@ -139,10 +139,18 @@ export function repeatedNameSourceFragments(cue: WatchCue, glossary: Glossary): 
   return fragments.every(text => text.trim()) && fragments.join('') === cue.text ? fragments : null;
 }
 export const sourceNumbers = (text: string): string[] => text.normalize('NFKC').replace(/−/g, '-').match(/[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:[.:]\d+)*(?:[eE][+-]?\d+)?%?/g) ?? [];
-/** Source numbers absent from the translation (90% rendered as 10%, 15% off as 九五折). Digit-only, so word numbers are not judged. */
+/** Source numbers absent from the translation (90% rendered as 10%, 15% off as 九五折). Digit-only, so word
+ * numbers are not judged. Whole tokens and occurrence counts: 190% does not satisfy 90%, and a number said
+ * twice must appear twice. */
 export function missingSourceNumbers(text: string, cue: Pick<WatchCue, 'text'>): string[] {
-  const output = text.normalize('NFKC').replace(/−/g, '-');
-  return [...new Set(sourceNumbers(cue.text))].filter(number => !output.includes(number)).slice(0, 20);
+  const available = new Map<string, number>();
+  for (const number of sourceNumbers(text)) available.set(number, (available.get(number) ?? 0) + 1);
+  const missing: string[] = [];
+  for (const number of sourceNumbers(cue.text)) {
+    const count = available.get(number) ?? 0;
+    if (count > 0) available.set(number, count - 1); else missing.push(number);
+  }
+  return [...new Set(missing)].slice(0, 20);
 }
 function attachedModelDescriptors(cue: WatchCue, glossary: Glossary): string[][] {
   return protectedTermOccurrences(cue, glossary).map(occurrence => {
