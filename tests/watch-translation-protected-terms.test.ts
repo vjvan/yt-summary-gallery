@@ -80,7 +80,7 @@ test('JSON-safe grammar permits completion; exact platform-name postvalidation r
   }, async () => {
     const [result] = await translateWatchWindow({ source, targets: [cue], before: [], after: [], glossary });
     assert.equal(calls, 2); assert.equal(result.originalText, cue.text); assert.equal(result.start, cue.start); assert.equal(result.end, cue.end); assert.equal(result.id, cue.id);
-    assert.equal(TRANSLATION_VERSION, 'watch-zh-TW-v13-contextual-protected-terms');
+    assert.equal(TRANSLATION_VERSION, 'watch-zh-TW-v14-taiwan-register-speaker-names');
   });
 });
 

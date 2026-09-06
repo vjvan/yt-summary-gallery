@@ -32,7 +32,7 @@ test('isolated local calls expose exactly one fragment, never other targets/cont
   }, async () => {
     const cues = await translateWatchWindow(input); assert.equal(calls, 8); assert.equal(peak, 1);
     assert.deepEqual(cues.map(({ id, start, end, originalText }) => ({ id, start, end, originalText })), targets.map(cue => ({ id: cue.id, start: cue.start, end: cue.end, originalText: cue.text })));
-    assert.equal(TRANSLATION_VERSION, 'watch-zh-TW-v13-contextual-protected-terms');
+    assert.equal(TRANSLATION_VERSION, 'watch-zh-TW-v14-taiwan-register-speaker-names');
   });
 });
 
@@ -41,7 +41,7 @@ test('one non-Chinese result gets one repair; another cue has its own bounded re
   await mockLocal(async (_url, init) => {
     const body = JSON.parse(String(init?.body)); calls++;
     if (body.messages[0].content.includes('previous attempt')) repairs++;
-    return envelope(calls === 1 ? targets[0].text : '這段影片的譯文');
+    const numbers = (JSON.parse(body.messages[1].content).text.match(/\d[\d.:,]*%?/g) ?? []).join(' '); return envelope(calls === 1 ? targets[0].text : `這段影片的譯文 ${numbers}`);
   }, async () => { assert.equal((await translateWatchWindow(input)).length, 8); assert.equal(calls, 9); assert.equal(repairs, 1); });
   calls = 0;
   await mockLocal(async () => { calls++; return envelope(calls === 2 ? '已修復第一段' : 'English only'); }, async () => {

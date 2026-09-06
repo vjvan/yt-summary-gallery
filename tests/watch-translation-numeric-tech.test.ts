@@ -16,7 +16,8 @@ const cue: WatchCue = { id: 'cue_441399ce4e8e1642dcf6', start: 1183.675, end: 11
   text: "Drew Brucker (19:43) very I'm glancing over this, but there's a lot in here, right? In painting, out painting, background removal, aware fill, 3D," };
 const source: WatchSource = { videoId: 'N-tmQ_Can_o', title: 'Public podcast fixture', language: 'en', sourceKind: 'manual', trackId: 'numeric-tech-fixture', cues: [cue] };
 const input = { source, targets: [cue], before: [], after: [], glossary };
-const envelope = (text = '這裡有很多功能，包含 3D。', extra = {}) => Response.json({ done: true, done_reason: 'stop', message: { content: JSON.stringify({ text }) }, ...extra });
+// The fixture keeps its speaker timestamp: since v14 a dropped source number is itself a repair trigger.
+const envelope = (text = 'Drew Brucker（19:43）這裡有很多功能，包含 3D。', extra = {}) => Response.json({ done: true, done_reason: 'stop', message: { content: JSON.stringify({ text }) }, ...extra });
 async function mockFetch(fetcher: typeof fetch, run: () => Promise<void>, mode = 'local') {
   const oldFetch = globalThis.fetch;
   const values = { WATCH_PROCESSING_MODE: mode, WATCH_LOCAL_MODEL: 'qwen2.5:7b' };

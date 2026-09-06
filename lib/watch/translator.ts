@@ -2,14 +2,18 @@ import type { Glossary } from '../glossary-defaults';
 import { WatchError } from './errors';
 import type { TranslatedCue, WatchCue, WatchSource, WatchProviderInfo } from './types';
 import { watchProviderInfo } from './provider';
-import { requestLocalCue, repeatedNameSourceFragments, requestLocalRepeatedNameRepair, untranslatedLocalWords } from './local-cue-translator';
+import { requestLocalCue, repeatedNameSourceFragments, requestLocalRepeatedNameRepair, untranslatedLocalWords, missingSourceNumbers } from './local-cue-translator';
 import { prepareProtectedCue, requiredProtectedTerms, missingProtectedTerms, protectedNamesOnlyText } from './protected-terms';
 import { normalizeTaiwanSubtitle } from './taiwan-terminology';
+import { speakerNames, withSpeakerNames, withoutSpeakerNames } from './speaker-names';
 // @ts-expect-error opencc-js does not ship TypeScript declarations.
 import * as OpenCC from 'opencc-js';
+// Character conversion only. OpenCC's phrase table (twp) was measured on 1279
+// public cues and over-converts ordinary words (連接→連線), so Taiwan vocabulary
+// is a curated list in taiwan-terminology.ts instead.
 const toTaiwanTraditional: (text: string) => string = OpenCC.Converter({ from: 'cn', to: 'tw' });
 
-export const TRANSLATION_VERSION = 'watch-zh-TW-v13-contextual-protected-terms';
+export const TRANSLATION_VERSION = 'watch-zh-TW-v14-taiwan-register-speaker-names';
 const MAX_TARGETS = 8;
 
 /** Only server-observed numeric timing and fixed copy may enter a public quality error. */
@@ -41,7 +45,8 @@ function promptGlossary(glossary: Glossary, text: string): Glossary {
 }
 
 export function buildWatchTranslationMessages(input: TranslateWatchWindowInput): { role: 'system' | 'user'; content: string }[] {
-  const { source, targets, before, after, glossary } = input;
+  const { source, targets, before, after } = input;
+  const glossary = withSpeakerNames(source, input.glossary);
   if (!targets.length || targets.length > MAX_TARGETS || targets.some((cue) => !cue.id || !cue.text.trim() || cue.text.length > 4000)
     || new Set(targets.map((cue) => cue.id)).size !== targets.length) throw new WatchError('INVALID_WINDOW', '翻譯片段為空白、重複或超過每批上限。');
   const context = (cues: WatchCue[]) => cues.slice(-2).map((cue) => ({ text: cue.text.slice(0, 500) }));
@@ -103,11 +108,15 @@ export async function translateWatchWindow(input: TranslateWatchWindowInput): Pr
     // A small local model can reflow a multi-cue paragraph while retaining valid IDs.
     // Expose only ONE source fragment per call; attach IDs and timing here, not in the model.
     const batchSignal = input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(90_000)]) : AbortSignal.timeout(90_000);
-    const localGlossary: Glossary = /\bFigma Weave\b/i.test(input.source.title) ? {
+    const localGlossary: Glossary = withSpeakerNames(input.source, /\bFigma Weave\b/i.test(input.source.title) ? {
       ...input.glossary,
       no_translate_terms: input.glossary.no_translate_terms.filter(term => term.toLowerCase() !== 'figma wave'),
       term_map: [['Figma Wave', 'Figma Weave'], ...input.glossary.term_map.filter(([term]) => term.toLowerCase() !== 'figma wave')],
-    } : input.glossary;
+    } : input.glossary);
+    // Speaker labels are best-effort keep terms: the user's own glossary names
+    // stay mandatory, a transliterated speaker after one repair is still a subtitle.
+    const softNames = new Set(speakerNames(input.source));
+    const hardTerms = (terms: string[]) => terms.filter(term => !softNames.has(term));
     const translated: TranslatedCue[] = [];
     let activeCue: WatchCue | undefined;
     try {
@@ -132,19 +141,24 @@ export async function translateWatchWindow(input: TranslateWatchWindowInput): Pr
         const languageNeutral = prepared.glossary.no_translate_terms.some(term => term.toLowerCase() === prepared.cue.text.trim().toLowerCase()) || /^[\d\s\p{P}\p{S}]+$/u.test(original) || /^[A-Z][A-Z\d_-]{1,19}$/.test(original);
         const untranslated = languageNeutral ? [] : untranslatedLocalWords(text, prepared.cue, prepared.glossary);
         const missing = missingProtectedTerms(text, protectedTerms);
+        const missingNumbers = languageNeutral ? [] : missingSourceNumbers(text, prepared.cue);
         // Each cue gets at most ONE quality repair. Eight cues therefore make at
         // most 16 sequential calls, all under the same 90-second batch deadline.
-        if ((!languageNeutral && (!/[\u3400-\u9fff]/.test(text) || untranslated.length > 0)) || missing.length > 0) {
+        // A lost source number shares that single repair; it is not a hard
+        // rejection afterwards, because an occasional \u516b\u5341 must not stall subtitles.
+        if ((!languageNeutral && (!/[\u3400-\u9fff]/.test(text) || untranslated.length > 0)) || missing.length > 0 || missingNumbers.length > 0) {
           batchSignal.throwIfAborted();
-          const repeated = missing.some(term => protectedTerms.filter(name => name === term).length > 1)
-            ? repeatedNameSourceFragments(prepared.cue, prepared.glossary) : null;
+          // Structured fragment repair is reserved for the user's repeated names; it splits only at those, so a speaker label cannot make it fail.
+          const hardGlossary = withoutSpeakerNames(input.source, prepared.glossary);
+          const repeated = hardTerms(missing).some(term => protectedTerms.filter(name => name === term).length > 1)
+            ? repeatedNameSourceFragments(prepared.cue, hardGlossary) : null;
           text = repeated
-            ? await requestLocalRepeatedNameRepair({ cue: prepared.cue, glossary: prepared.glossary, model: provider.translationModel, signal: batchSignal, fragments: repeated })
-            : await requestLocalCue({ cue: prepared.cue, glossary: prepared.glossary, model: provider.translationModel, signal: batchSignal, repair: untranslated.length ? untranslated : true, missingTerms: missing });
+            ? await requestLocalRepeatedNameRepair({ cue: prepared.cue, glossary: hardGlossary, model: provider.translationModel, signal: batchSignal, fragments: repeated })
+            : await requestLocalCue({ cue: prepared.cue, glossary: prepared.glossary, model: provider.translationModel, signal: batchSignal, repair: untranslated.length ? untranslated : !/[\u3400-\u9fff]/.test(text), missingTerms: missing, missingNumbers });
         }
         batchSignal.throwIfAborted();
         if (!languageNeutral && untranslatedLocalWords(text, prepared.cue, prepared.glossary).length) throw localQualityFailure(cue, '仍含未翻譯的一般英文');
-        if (missingProtectedTerms(text, protectedTerms).length) throw localQualityFailure(cue, '未保留指定專有名詞或其出現次數');
+        if (missingProtectedTerms(text, hardTerms(protectedTerms)).length) throw localQualityFailure(cue, '未保留指定專有名詞或其出現次數');
         const validationGlossary = languageNeutral ? { ...prepared.glossary, no_translate_terms: [...prepared.glossary.no_translate_terms, original] } : prepared.glossary;
         translated.push(...validateWatchTranslation(JSON.stringify({ cues: [{ id: cue.id, text }] }), [cue], validationGlossary, { localTaiwan: true }));
       }

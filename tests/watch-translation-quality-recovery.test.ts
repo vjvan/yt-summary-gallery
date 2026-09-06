@@ -81,9 +81,9 @@ test('service isolates a failed sixteenth call, retains seven cue caches and ret
   const store = new WatchStore(':memory:'); let calls = 0, recovered = false, writes = 0;
   const originalPut = store.put.bind(store);
   store.put = (key, cues) => { writes++; originalPut(key, cues); };
-  await mockLocal(async () => {
-    calls++;
-    return envelope(recovered || (calls % 2 === 0 && calls < 16) ? '使用 Higgsfield。' : '使用希格斯場。');
+  await mockLocal(async (_url, init) => {
+    calls++; const step = JSON.parse(JSON.parse(String(init?.body)).messages[1].content).text.match(/\d+/)?.[0] ?? '';
+    return envelope(recovered || (calls % 2 === 0 && calls < 16) ? `使用 Higgsfield 做第 ${step} 步。` : `使用希格斯場做第 ${step} 步。`);
   }, async () => {
     const service = new WatchService({ store, provider: watchProviderInfo, source: async () => ({ ...source, cues: eight }), translate: translateWatchWindow, glossary: () => glossary, enabled: () => true, limits: () => ({ sessionCalls: null, dailyCalls: null }) });
     try {

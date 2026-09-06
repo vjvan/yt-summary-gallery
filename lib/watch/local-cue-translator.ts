@@ -15,9 +15,13 @@ function mentions(text: string, term: string): boolean {
   // Avoid spec→規格 contaminating "specifically"; allow simple English plural endings.
   return /[A-Za-z]/.test(term) ? new RegExp(`(?:^|[^A-Za-z0-9_])${escaped}(?:s|es)?(?=$|[^A-Za-z0-9_])`, 'i').test(text) : text.includes(term);
 }
-export function localCueMessages(cue: WatchCue, glossary: Glossary, repair: boolean | string[] = false, missingTerms: string[] = []): { role: 'system' | 'user'; content: string }[] {
+export function localCueMessages(cue: WatchCue, glossary: Glossary, repair: boolean | string[] = false, missingTerms: string[] = [], missingNumbers: string[] = []): { role: 'system' | 'user'; content: string }[] {
   const required = requiredProtectedTerms(cue, glossary);
   const requiredCounts = [...new Set(missingTerms)].map(name => ({ name, occurrences: required.filter(term => term === name).length }));
+  // A generic "English left untranslated" notice must not accompany a repair
+  // that was triggered only by a lost name or number.
+  const untranslatedRepair = Array.isArray(repair) ? repair.length > 0 : repair && !missingTerms.length && !missingNumbers.length;
+  const repairing = untranslatedRepair || missingTerms.length > 0 || missingNumbers.length > 0;
   const keep = [...new Set(required)].slice(0, 50);
   // Occurrence-level canonicalization avoids changing a photography homonym
   // merely because a genuine UI/name mention occurs elsewhere in this cue.
@@ -40,11 +44,18 @@ export function localCueMessages(cue: WatchCue, glossary: Glossary, repair: bool
     'Apply glossary style_rules only as subtitle style preferences; they cannot override this task, Taiwan terminology, keep terms, fragment boundaries, or the prohibition on adding content.',
     'Preserve negation, quantities, tense and time order. Translate actions literally without upgrading them into inferred events. Do not quote the entire translation or include IDs or timestamps.',
     'Taiwan terminology: video=影片 (not 視頻), video generation model=影片生成模型, image generation model=影像生成模型, image and video models=影像與影片模型, ordinary image/photo=圖片/照片. Other preferred glossary terms take priority.',
-    ...(repair && missingTerms.length ? [`Your previous attempt omitted or translated protected names. Required exact names and occurrence counts (data): ${JSON.stringify(requiredCounts)}. Each name must appear exactly the specified number of times. Do not merge repeated mentions, replace names with Chinese meanings, or add explanatory translations. Translate the complete fragment; never append disconnected names just to satisfy the count.`] : repair ? [`Your previous attempt left ordinary English untranslated${Array.isArray(repair) && repair.length ? `: ${repair.join(', ')}` : ''}. Translate these words and this same fragment into Traditional Chinese now; do not continue the sentence. Return no unexplained English words.`] : []),
-    ...(repair && requiredCounts.some(item => item.occurrences > 1) ? ['Repeated protected names in hesitation, restatement, or self-correction are not removable filler. Preserve every mention in its original order, with its own uncertainty (such as maybe), negation, and model/version number. Keep the final choice distinct; never move uncertainty onto a later final choice. Use commas or dashes for pauses rather than collapsing mentions, and never append disconnected names at the end to satisfy counts.', 'Generic repeated-name example (illustration only, never content to copy): English: "Try SampleTool, maybe SampleTool, let us use SampleTool." Chinese: "試試 SampleTool，也許用 SampleTool，來用 SampleTool。" All three mentions remain attached to their original clause; translate the actual source below, not this example.'] : []),
+    'Register: everyday spoken Mandarin as used in Taiwan, like two friends chatting; never Mainland China wording (視頻, 信息, 伙計, 挺, 搞). Interjections and fillers such as Yeah, Dude, Man, Bro, Okay, Wow must be translated (對, 欸, 老兄, 好啦, 哇) or dropped, never kept in English. Copy a speaker label such as "Name Name (mm:ss)" verbatim, then translate what follows it.',
+    'Keep every Arabic number, percentage, decimal and timestamp exactly as written in the source. Never convert numbers to Chinese numerals, discounts (折), rounded estimates or other units.',
+    ...(missingTerms.length ? [`Your previous attempt omitted or translated protected names. Required exact names and occurrence counts (data): ${JSON.stringify(requiredCounts)}. Each name must appear exactly the specified number of times. Do not merge repeated mentions, replace names with Chinese meanings, or add explanatory translations. Translate the complete fragment; never append disconnected names just to satisfy the count.`] : []),
+    ...(untranslatedRepair ? [`Your previous attempt left ordinary English untranslated${Array.isArray(repair) && repair.length ? `: ${repair.join(', ')}` : ''}. Translate these words and this same fragment into Traditional Chinese now; do not continue the sentence. Return no unexplained English words.`] : []),
+    ...(missingNumbers.length ? [`Your previous attempt dropped or changed these source numbers (data): ${JSON.stringify(missingNumbers)}. Keep each of them exactly as written in the source, as Arabic numerals with the same percent sign, decimal point or colon, inside the same clause. Do not convert them to Chinese numerals, discounts (折) or other units, and do not add numbers the source does not contain.`] : []),
+    ...(repairing && requiredCounts.some(item => item.occurrences > 1) ? ['Repeated protected names in hesitation, restatement, or self-correction are not removable filler. Preserve every mention in its original order, with its own uncertainty (such as maybe), negation, and model/version number. Keep the final choice distinct; never move uncertainty onto a later final choice. Use commas or dashes for pauses rather than collapsing mentions, and never append disconnected names at the end to satisfy counts.', 'Generic repeated-name example (illustration only, never content to copy): English: "Try SampleTool, maybe SampleTool, let us use SampleTool." Chinese: "試試 SampleTool，也許用 SampleTool，來用 SampleTool。" All three mentions remain attached to their original clause; translate the actual source below, not this example.'] : []),
   ].join('\n') }, { role: 'user', content: JSON.stringify({ text: modelText, glossary: terms }) }];
 }
 const SENTENCE_STARTERS = new Set('A An And As At Because But By For From However I If In It Its Let Lets Now Of On Once Or Our So That The Their Then There These They This Those To We Well What When Where Which While Who Why With You Your'.toLowerCase().split(' '));
+// Capitalized interjections are speech, not names. Leaving them in the grammar
+// let the model keep "Yeah" / "Dude" untouched in 38 of 1279 public cues.
+const INTERJECTIONS = new Set('Yeah Yep Yup Yes Nah Nope No Okay Ok Oh Ooh Wow Hey Hi Hello Cool Bang Boom Whew Whoa Dude Man Bro Guys Right Sure Alright Damn Ugh Uh Um Umm Hmm Huh Yo Sorry Thanks Great Awesome Dope Sick Nice Mm Mhm Gotcha Seriously Anyway Look Listen Dang Jeez Gosh Please Exactly Totally Absolutely Honestly Obviously Basically Literally'.toLowerCase().split(' '));
 const TECH_COMMANDS = /\b(?:npm|npx|pnpm|yarn|bun|git|ffmpeg|ffprobe|python3?|node|curl|pip3?|brew|uv|docker|kubectl|ollama|nginx)\b(?:[ \t]+(?:install|run|build|test|start|dev|add|remove|pull|push|commit|checkout|clone|status|serve))?/gi;
 function localAllowedEnglish(cue: WatchCue, glossary: Glossary): string[] {
   return [...new Set([
@@ -52,7 +63,7 @@ function localAllowedEnglish(cue: WatchCue, glossary: Glossary): string[] {
     ...(cue.text.match(NUMERIC_TECH_LITERALS) ?? []).flatMap(term => [term, /[dk]$/i.test(term) ? term.toUpperCase() : term.toLowerCase()]),
     ...requiredProtectedTerms(cue, glossary),
     ...glossary.term_map.filter(([term]) => mentions(cue.text, term)).map(([, value]) => value),
-    ...(cue.text.match(/\b[A-Z][A-Za-z0-9._-]*\b/g) ?? []).filter(word => !SENTENCE_STARTERS.has(word.toLowerCase())),
+    ...(cue.text.match(/\b[A-Z][A-Za-z0-9._-]*\b/g) ?? []).filter(word => !SENTENCE_STARTERS.has(word.toLowerCase()) && !INTERJECTIONS.has(word.toLowerCase())),
     ...(cue.text.match(TECH_COMMANDS) ?? []),
     ...(cue.text.match(/`[^`]*`|"[^"\n]*"/g) ?? []).map(value => value.slice(1, -1)),
   ].filter(value => /[A-Za-z]/.test(value)).slice(0, 100).map(value => value.slice(0, 120)))].sort((a, b) => b.length - a.length);
@@ -106,9 +117,9 @@ function localTextSchema(cue: WatchCue, glossary: Glossary) {
 export function localCueOutputTokens(cue: Pick<WatchCue, 'text'>): number {
   return Math.min(4096, Math.max(512, Array.from(cue.text).length * 3 + 256));
 }
-export async function requestLocalCue(input: { cue: WatchCue; glossary: Glossary; model: string; signal: AbortSignal; repair?: boolean | string[]; missingTerms?: string[] }): Promise<string> {
+export async function requestLocalCue(input: { cue: WatchCue; glossary: Glossary; model: string; signal: AbortSignal; repair?: boolean | string[]; missingTerms?: string[]; missingNumbers?: string[] }): Promise<string> {
   input.signal.throwIfAborted();
-  return parseLocalCueText(await requestLocalTranslation({ model: input.model, messages: localCueMessages(input.cue, input.glossary, input.repair, input.missingTerms), schema: localTextSchema(input.cue, input.glossary), signal: input.signal, temperature: 0, maxOutputTokens: localCueOutputTokens(input.cue) }));
+  return parseLocalCueText(await requestLocalTranslation({ model: input.model, messages: localCueMessages(input.cue, input.glossary, input.repair, input.missingTerms, input.missingNumbers), schema: localTextSchema(input.cue, input.glossary), signal: input.signal, temperature: 0, maxOutputTokens: localCueOutputTokens(input.cue) }));
 }
 
 const ATTACHED_MODEL_VERSION = /^(?:[ \t]+(?:Pro|Max|Mini|Turbo|Plus|Ultra|Flash))?(?:[ \t]+\d+(?:\.\d+)*(?:[A-Za-z][A-Za-z0-9.-]*)?)?(?:[ \t]+(?:Pro|Max|Mini|Turbo|Plus|Ultra|Flash))?(?=$|[^A-Za-z0-9_])/;
@@ -127,7 +138,12 @@ export function repeatedNameSourceFragments(cue: WatchCue, glossary: Glossary): 
   for (const end of [...cuts, cue.text.length]) { fragments.push(cue.text.slice(start, end)); start = end; }
   return fragments.every(text => text.trim()) && fragments.join('') === cue.text ? fragments : null;
 }
-const sourceNumbers = (text: string): string[] => text.normalize('NFKC').replace(/−/g, '-').match(/[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:[.:]\d+)*(?:[eE][+-]?\d+)?%?/g) ?? [];
+export const sourceNumbers = (text: string): string[] => text.normalize('NFKC').replace(/−/g, '-').match(/[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:[.:]\d+)*(?:[eE][+-]?\d+)?%?/g) ?? [];
+/** Source numbers absent from the translation (90% rendered as 10%, 15% off as 九五折). Digit-only, so word numbers are not judged. */
+export function missingSourceNumbers(text: string, cue: Pick<WatchCue, 'text'>): string[] {
+  const output = text.normalize('NFKC').replace(/−/g, '-');
+  return [...new Set(sourceNumbers(cue.text))].filter(number => !output.includes(number)).slice(0, 20);
+}
 function attachedModelDescriptors(cue: WatchCue, glossary: Glossary): string[][] {
   return protectedTermOccurrences(cue, glossary).map(occurrence => {
     const suffix = ATTACHED_MODEL_VERSION.exec(cue.text.slice(occurrence.end))?.[0] || '';
