@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "YT Summary｜YouTube 字幕與 Discord 直播翻譯",
+  "description": "沿用本機配對。YouTube 字幕流程與手動 Discord 分頁音訊即時翻譯；Discord 僅限全本機，不用麥克風、不錄影、不讀聊天室。",
+  "version": "0.5.0",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "tabCapture",
+    "offscreen"
+  ],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://youtube.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "https://discord.com/channels/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "YT Summary 繁中字幕"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://youtube.com/*"
+      ],
+      "js": [
+        "core.js",
+        "content.js",
+        "audio-core.js",
+        "audio-content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false,
+      "world": "ISOLATED"
+    }
+  ]
+}

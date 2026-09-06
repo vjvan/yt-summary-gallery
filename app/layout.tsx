@@ -29,9 +29,15 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <nav className="border-b border-gray-100 bg-white">
-          <div className="max-w-6xl mx-auto px-4 flex items-center gap-6 h-12">
+          <div className="max-w-6xl mx-auto px-4 flex items-center gap-6 h-12 overflow-x-auto whitespace-nowrap [&>a]:shrink-0">
             <a href="/" className="text-sm font-bold text-gray-700 hover:text-orange-500 transition-colors">
               影片庫
+            </a>
+            <a href="/watch" className="text-sm font-bold text-gray-700 hover:text-orange-500 transition-colors">
+              近即時字幕
+            </a>
+            <a href="/live" className="text-sm font-bold text-gray-700 hover:text-orange-500 transition-colors">
+              直播翻譯
             </a>
             <a href="/remix" className="text-sm font-bold text-gray-700 hover:text-orange-500 transition-colors">
               短影片混剪

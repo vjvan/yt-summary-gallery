@@ -8,7 +8,9 @@
     "start": "next start -H 127.0.0.1",
     "lint": "eslint",
     "cloud:build": "npm --prefix cloud-api run build",
-    "cloud:sync": "node scripts/sync-aivan-projects-to-cloud.mjs"
+    "cloud:sync": "node scripts/sync-aivan-projects-to-cloud.mjs",
+    "test:watch": "tsx --test tests/watch-*.test.ts && node --test extensions/yt-summary-watch/tests/*.test.cjs",
+    "watch:local": "node scripts/start-watch-local.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.100.0",
@@ -28,6 +30,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.1",
     "tailwindcss": "^4",
+    "tsx": "^4.23.13",
     "typescript": "^5"
   }
 }

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>YT Summary 繁中字幕</title><link rel="stylesheet" href="popup.css"></head>
+<body>
+<header><p class="eyebrow">YT SUMMARY · LOCAL</p><h1>繁中同步字幕</h1><p>原文字幕同步翻譯；另可手動啟用分頁音訊實驗。<br>不使用麥克風、不錄影、不先跑整片摘要。</p></header>
+<form id="settings">
+<label>本機 YT Summary 網址<input id="server" type="url" required value="http://127.0.0.1:3000" spellcheck="false"></label>
+<label>配對權杖<input id="token" type="password" required autocomplete="off" placeholder="從本機 /watch 複製；不是 OpenAI API key"></label>
+<p class="help">請先開啟本機 <code>/watch</code> 取得配對權杖。權杖只存在此台 Chrome，不會放到 YouTube 頁面。</p>
+<button id="pair" type="button" class="secondary">測試連線／儲存配對（不啟用翻譯）</button>
+<p id="processingStatus" role="status" aria-live="polite">正在確認後端處理模式…</p>
+<div class="row"><label id="maxBatchesLabel">每支影片最多翻譯批次<input id="maxBatches" type="number" min="1" max="50" value="10" required></label><label>字幕顯示<select id="mode"><option value="bilingual">繁中＋原文</option><option value="translated">只顯示繁中</option><option value="original">只顯示原文</option></select></label></div>
+<p id="cloudLimitHelp" class="help">每批最多 8 段；另受後端單片／每日上限限制。這是批次數，不是金額。已開始的請求可能仍會計費。</p>
+<label id="localFullPrefetchLabel" class="check" hidden><input id="localFullPrefetch" type="checkbox" checked><span>全本機整片預譯（預設）：載入英文字幕後立即逐批翻譯，暫停影片、切到其他分頁也會繼續使用本機算力；直到全片處理完、切至原文模式或你停止。不生成摘要、不收音。</span></label>
+<label class="check"><input id="consent" type="checkbox"><span id="consentText">我同意將這支影片的原文字幕、標題與術語傳送至本機設定的翻譯模型供應商，並接受上述批次上限及可能的 API 費用。</span></label>
+<label class="check"><input id="autoMode" type="checkbox"><span id="autoModeText">自動模式（選用）：在功能啟用期間，已開啟及之後開啟／切換的 YouTube 影片，在播放時自動開始，沿用以上同意與上限。</span></label>
+<p id="status" role="status" aria-live="polite"></p>
+<button id="enable" type="submit" disabled>啟用並開始目前影片</button>
+<button id="disable" type="button" class="secondary">全部停用並清除畫面字幕</button>
+</form>
+<section class="audio-section" aria-labelledby="audio-title">
+<h2 id="audio-title">無字幕：分頁收音（實驗）</h2>
+<p>每次手動開始，僅錄目前 YouTube 分頁的聲音，不是麥克風或螢幕錄影。先播放影片並設定 1 倍速。</p>
+<label id="maxChunksLabel">本次最多收音片段<input id="maxChunks" type="number" min="2" max="20" value="2" required></label>
+<p class="help">每段 12 秒；一次僅 1 段待辨識，辨識期間不新增錄音，可能有未收錄空段。結果為「收音逐字稿（延遲）」，不是零延遲字幕。暫停、跳轉、廣告、切分頁或非 1 倍速都會停止，須重新手動同意。</p>
+<label class="check"><input id="audioConsent" type="checkbox"><span id="audioConsentText">我同意本次將原分頁音訊送交 OpenAI 進行語音辨識與繁中翻譯，會產生兩階段 API 費用，以上述片段上限為限。此同意只限這一次，不沿用字幕自動模式或之前的收音同意。</span></label>
+<p id="audioStatus" role="status" aria-live="polite">尚未收音。每次開始都需重新同意；請先播放影片並設為 1 倍速。</p>
+<button id="audioStart" type="button" disabled>同意並開始本次分頁收音</button>
+<button id="audioStop" type="button" class="secondary">停止分頁收音</button>
+</section>
+<section class="audio-section" aria-labelledby="live-title">
+<h2 id="live-title">Discord 直播翻譯（全本機・實驗）</h2>
+<p id="liveSource">正在確認目前分頁來源…</p>
+<p class="help">請先在 Chrome 的 Discord 原頻道播放你有權處理的音訊。只擷取該分頁播放聲音，不用麥克風、不錄影、不讀聊天室、不代你加入或發送訊息。</p>
+<p class="help">收音與辨識同時進行，依停頓切成約 3–6 秒、最多 8 秒的完整音訊。待處理超過 30 秒會停止並明示未處理內容，不偷偷跳句。聲音仍在原 Discord 分頁播放。</p>
+<label class="check"><input id="liveConsent" type="checkbox"><span>我已獲得適當同意，允許本次在本機擷取上方來源分頁的音訊並辨識／翻譯。<strong>切到翻譯台、其他分頁或關閉此 Popup 後，原來源仍會持續收音</strong>，直到我按停止、離開原頻道或發生錯誤。此同意每次重新勾選，不沿用 YouTube 或自動模式。</span></label>
+<p id="liveStatus" role="status" aria-live="polite">尚未開始。須確認來源及本機就緒，並另行手動同意。</p>
+<button id="liveRefresh" type="button" class="secondary">重新檢查來源與本機就緒</button>
+<button id="liveStart" type="button" disabled>同意並開始此 Discord 分頁收音</button>
+<button id="liveStop" type="button" class="secondary">立即停止 Discord 收音</button>
+<button id="liveOpen" type="button" class="secondary">開啟直播翻譯台（可與原分頁並排）</button>
+</section>
+<footer>預設關閉 · 收音需每次手動同意 · 只連線本機</footer>
+<script src="core.js"></script><script src="popup.js"></script><script src="live-core.js"></script><script src="live-popup.js"></script>
+</body></html>
