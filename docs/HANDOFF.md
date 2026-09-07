@@ -1,77 +1,60 @@
 # Codex → Claude Code／Codex 接手紀錄
 
-更新：2026-09-07。此檔是可提交的工程交接；不包含資料庫、API key、私人實作筆記、影音或真實字幕評測資料。
+更新：2026-09-08（Claude Code 接手 d101c81 之後的一輪）。此檔是可提交的工程交接；不包含資料庫、API key、私人實作筆記、影音或真實字幕評測資料。
 
 ## 先讀這一段
 
 - 專案：`yt-summary-gallery`，Next.js 16.2.1。先讀 `AGENTS.md` 與專案內附 Next.js 文件；不要套用舊版慣例。
-- 遠端：`https://github.com/vjvan/yt-summary-gallery.git`，公開 repo；本次 checkpoint 以 `master` 為基準。
+- 遠端：`https://github.com/vjvan/yt-summary-gallery.git`；本次以 `master` 為基準。
 - 不假設任何另一個 agent 的 session 記憶存在。先跑 `git status --short`、`git log -3 --oneline`，核對現有服務與 port，再決定工作範圍。
 - 同時使用 Claude Code／Codex 時，一次只由一方修改同一組檔案或部署；另一方可做唯讀 review。不要互相覆蓋未提交的變更，不要 `git reset --hard` 或 force push。
-- 所有介面／說明採繁體中文與台灣用語。品牌與平台名如 OpenArt、Higgsfield 保留英文；「字幕全部有中文」不等於翻譯語義正確。
+- 所有介面／說明採繁體中文與台灣用語。品牌與平台名保留英文；「字幕全部有中文」不等於翻譯語義正確。
 
-## 本次已完成的工程範圍
+## 2026-09-07 到 09-08 這一輪做了什麼（Claude Code）
 
-1. **字幕與影片庫恢復**：本機整片字幕處理、缺句／短句恢復、工作狀態、原片下載錯誤提示；動態提供字幕／卡片／影音產物。
-2. **附加合法原片**：`attach-video` 可沿用同筆字幕，不重辨識或重翻；需要使用者授權與同版影片確認。檔案與片長檢查不能代替人工核對同步。
-3. **Carousel 三軸樣式**：配色／字型組／背景；`card_style` 持久化，重畫、快速編輯與 AIVAN project 共用設定。字型與本機 render 依賴需另備，乾淨 clone 不附字型或生成圖片。
-4. **證據學習 v18**：原片觀點／分析／私人用途分層，來源引用與時間戳、五個判斷問題、四種分類、驗證動作與私人實作紀錄；公開草稿用白名單隔離私人欄位。
+決策背景：影片字幕翻譯庫改「三層分工」，理解層交給 NotebookLM，自家守字幕層（觀看雙語、台灣用語字庫）與產出層（20 頁三軸圖卡），本機 7B 摘要萃取降為備援。研究與決策在 vault（`projects/yt-translation-tool/notebooklm-integration-research-2026-09-07.md`、`decisions/log.md` 2026-09-07）。
 
-重要檔案：
+1. **NotebookLM 來源包**：`GET /api/summaries/{id}/notebooklm-source?lang=bi|en|zh`，逐句英文加繁中譯文各帶時間戳的純文字檔，上傳 NotebookLM 當第二個來源。卡片頁字幕下載區多一顆按鈕。純函式 `lib/pipeline/notebooklm-source.ts`。說明 `docs/notebooklm-integration.md`。
+2. **外部分析貼入**：`POST/DELETE /api/summaries/{id}/import-analysis`。確定性解析器 `lib/pipeline/import-analysis.ts` 把 NotebookLM 繁中報告切成剛好 20 頁 SocialCard，只覆寫 `summary.social_cards` 與 `social_cards_source`（原始 JSON 物件不經正規化重寫），匯入前的兩個欄位原始值與存在旗標備份在新欄位 `summaries.external_analysis`，前端接既有 regenerate-cards 重畫；DELETE 逐字還原。面板 `components/AnalysisImportPanel.tsx`。
+3. **影片庫渲染鎖**：`lib/pipeline/local-youtube-library.ts` 的 `renderLibraryCards` 改為原子取 `card_render_token`（與 regenerate-cards 共用同一欄位互斥），取鎖後才讀最新摘要，發布與失敗清理只認自己的鎖；重啟由 `recoverLocalLibraryJobs` 清鎖。這是 Codex 抓到的跨 worker 圖片覆蓋競態的修法。
+4. **字幕語意校訂 v1**：`lib/review/*`、`app/api/summaries/{id}/subtitle-review`、`components/SubtitleReviewPanel.tsx`、卡片頁「語意校訂」分頁。話語視窗重譯（本機 Ollama，只送原文與前後文，模型回一段中文，伺服器依原文字數比例切回各句）、純規則風險旗標決定順序、候選逐句採用、套用才寫回 `segments_zh`／`transcript_zh` 與 SRT，並記 `subtitle_revisions` 可整批還原。說明與邊界 `docs/subtitle-review.md`。
 
-- `lib/learning/`、`components/LearningAnalysisPanel.tsx`、`app/api/summaries/[id]/learning/route.ts`
-- `lib/card-style.ts`、`lib/pipeline/render-card.ts`、`components/CardStylePanel.tsx`
-- `lib/pipeline/local-youtube-library.ts`、`lib/pipeline/attach-original.ts`、`lib/generated-media.ts`
-- `docs/learning-analysis-v18.md`、`docs/watch-local.md`
+## 驗證狀態
 
-學習分析使用 `learning-v1.1-source-anchors`：模型選 anchor，伺服器複製原文與時間戳；不是讓模型自行編引文。引用精確匹配仍不能保證推論正確。
+- 程式測試 446、extension 100 全過；`tsc --noEmit` 乾淨；改動檔 eslint 乾淨（`lib/pipeline/assemble-video.ts`、`detect-source.ts` 各有一條既有 lint 問題，未動）。
+- 隔離目錄 production build 通過（把 node_modules 用 APFS clone 進隔離目錄，symlink 會被 Turbopack 拒絕）。
+- Chrome 實測（3001 開發伺服器，同一份正式 DB）：來源包 API 回 1123 句雙語；貼入面板 20 頁預覽、匯入後重畫第 1、3、19、20 頁目視正確、還原後回到本機萃取；語意校訂 3 個視窗 30 秒出 18 句候選、採用一句、套用後 DB／逐字稿／SRT 都更新、還原後與匯入前備份逐位元一致。
+- Codex 對抗審查三輪：第一輪 4 P1 3 P2 1 P3、第二輪剩 2 P1 1 P2 1 P3、第三輪見 vault `projects/yt-translation-tool/codex-reviews/2026-09-07-notebooklm-integration.md`。全部修法都有回歸測試。
 
 ## 內容與翻譯的真實驗收邊界
 
-- 本機模型曾完整處理一支影片，但原始 7 點草稿仍有歸因與語義問題；示範另由助理對照原文重選、校訂成 4 點。**不是人類認證、外部事實查核或效益證明**。
-- 這份示範存於本機 DB，不隨 Git 上傳；乾淨 clone 不會自帶影片或這 4 點內容。公開草稿不是已產出的新 20 張 PNG，不能為湊頁數捏造分析。
-- 字幕校正只做了隔離評測：雲端對部分否定、數字、前後景有改善，但跨句詞義／慣用語仍錯；尚未把雲端校訂自動套用正式字幕，也未整庫重翻。
-- 待深化方向：完整語意視窗重譯 → 回對時間軸 → 台灣術語與品牌規則 → 獨立高風險檢查 → 原文／初譯／校訂／核准版本分存。需要來源疑詞回聽及未見過的保留案例，不用模型自評分數當正確率。
-- 本機評測工具、真實字幕 fixture、原始結果與私人覆核只保留原機；已用 `.gitignore` 明確排除。不要把這些檔案、環境檔或 DB 加進公開 repo。
+- 語意校訂的候選是 7B 模型輸出：實測會把整段語意翻對（否定句修好）但仍可能混入前後文、數字寫成中文或漏掉；備註會標出數字漏失與長度異常，採用前一定要自己看原文。沒有做「未見過的保留測試集」，不能宣稱整片正確率。
+- 風險旗標會漏也會誤報，只決定順序不決定對錯。
+- Chrome 擴充在 YouTube 原站用的是逐句快取（`data/watch*.db`），語意校訂套用只改影片庫的 `segments_zh` 與 SRT，不回寫擴充快取；已燒錄的 MP4 不會自動重燒。
+- 本機評測工具、真實字幕 fixture 仍只保留原機；`.gitignore` 已排除。
 
 ## 本機服務與開機問題
 
-- 正式入口為 `http://127.0.0.1:3000/`；舊 `3111` 僅是導向，不是第二份服務。
-- 開機後曾因服務未啟動發生 `ERR_CONNECTION_REFUSED`。已用既有 `scripts/start-watch-local.mjs` 恢復；目前模式為 `local`／`qwen2.5:7b`。恢復時原有 11 筆摘要資料未變更。
-- **登入自動啟動尚未實作，也尚未取得本輪該設定的明確確認**。不能說已解決重開機自啟；使用者目前要求先 commit／push／交接。
-- 先檢查 `3000`、`3111`、`11434` 是否已有服務，不得另起重複程序或 kill 不明程序。既有服務沒有設定自啟時，關機後會停止。
-- 沒有服務時，可依 `docs/watch-local.md` 操作；既有 build 與模型均備妥才可執行 `WATCH_LOCAL_MODEL=qwen2.5:7b npm run watch:local -- --port 3000`。不要每次登入都 build、下載模型或自動生成。
-
-### 自啟實作前必須處理的安全項目
-
-`instrumentation.ts` 會執行 `recoverZombieJobs()`。舊摘要管線可能自動續跑中斷任務，包括呼叫雲端模型；`WATCH_PROCESSING_MODE=local` 不能概括阻止所有舊管線。
-
-因此在承諾「登入只開服務、不自動生成／花費」之前，需先加入明確的 legacy auto-resume 開關與測試（例如預設關閉、只有 `YT_SUMMARY_AUTO_RESUME=1` 才允許）。**這個開關目前不存在，不要只設定環境變數就宣稱有效。**
-
-關閉時仍需安全回收中斷狀態與保存產物；不能整個略過 recovery。現有重新提交入口未必保留斷點，不能宣稱已有獨立手動 resume API。自啟方案需取得同意、以使用者 LaunchAgent 管理 loopback 服務、驗證退出重啟及下一次真正登入；bootstrap 成功不等於已測過重開機。
+- 正式入口為 `http://127.0.0.1:3000/`；舊 `3111` 僅是導向。啟動器 `scripts/start-watch-local.mjs --port 3000` 同時管 ollama 與轉址。
+- 部署方式：備份 `data/summaries.db`（`.backup`）→ 確認沒有 processing／burning／持鎖列 → 停啟動器 → `npm run build` → `nohup node scripts/start-watch-local.mjs --port 3000` → 3000 smoke。不要在服務中的 `.next` 上 build。
+- **登入自動啟動仍未實作**，前置條件（legacy auto-resume 開關與測試）也未做；`instrumentation.ts` 的 `recoverZombieJobs()` 仍會續跑 transcribed／translated／summarized 的舊管線，可能打到雲端模型。裝 LaunchAgent 前先加開關。
+- 先檢查 `3000`、`3111`、`11434` 是否已有服務，不得另起重複程序或 kill 不明程序。
 
 ## 驗證與修改規則
 
-使用者要求每次交付都實際 smoke test。不能只通過編譯就說可用。
-
 ```sh
-# 在專案根目錄；這些測試不需真的呼叫模型。
 node --import tsx --test tests/*.test.ts tests/*.test.cjs
 node --test extensions/yt-summary-watch/tests/*.test.cjs
 node_modules/.bin/tsc --noEmit
 ```
 
-- `npm run build` 請在隔離工作目錄執行，不覆寫正在服務的 `.next`；本機字型、模型、ffmpeg 等可用性須另外檢查。
+- `npm run build` 在隔離工作目錄執行；本機字型、模型、ffmpeg 可用性另外檢查。
 - 修改需驗 Chrome 桌面／手機、來源時間戳跳轉、資料保存與私人／公開隔離。只讀頁面不得啟動付費 API 或模型。
-- 前次包含本機私人校正實驗的完整測試為 412 項、extension 100 項；公開 checkpoint 排除了私人 calibration 組，項數應以當次命令輸出為準，不沿用舊數字。
-- 本次公開 checkpoint 的暫存內容已另存至隔離目錄驗證：程式測試 400／400、extension 100／100、TypeScript 及正式 build 通過。驗證目錄未帶入 `.env.local`、正式 DB 或私人校正 fixture。
-- 已做過正式 Chrome 開機恢復 smoke：圖卡、證據學習、字幕資產與手機預覽可讀。這只驗網站恢復，不代表字幕語義全部校對完成。
-- 更新／重啟前檢查 active jobs、備份 SQLite（含 WAL 的一致性備份），保存現有字幕、摘要、圖卡和私人筆記；不把隔離測試 DB 整份覆蓋正式 DB。
-- API key 不要貼聊天或寫 repo。付費模型測試限使用者同意的範圍，保存實際 usage，不能默默 fallback 或整庫重翻。
+- 更新／重啟前檢查 active jobs、備份 SQLite（含 WAL 的一致性備份）。
+- API key 不要貼聊天或寫 repo。付費模型測試限使用者同意的範圍。
 
 ## 接手後建議順序（不是自動執行授權）
 
-1. 先確認使用者這次要深化「語意校訂」、「證據學習」或「登入自啟」，不要一次改全部。
-2. 以同一支影片做小範圍校訂預覽，保留來源與版本，再擴大規則。
-3. 若使用者同意自啟，先解 legacy 自動續跑／付費風險，再裝 LaunchAgent。
-4. 本機校正實驗需在原機另讀；Git 上的純程式 checkout 不含個人內容。
+1. 語意校訂品質：用 `docs/translation-calibration-v18.md`（原機）的 12 個難例跑一次校訂管線，逐例人工評；考慮把候選對齊改成錨點對齊而非字數比例。
+2. 登入自啟：先做 `YT_SUMMARY_AUTO_RESUME` 開關與測試，再裝 LaunchAgent。
+3. NotebookLM 貼入：多蒐集幾種 NotebookLM 輸出樣式（Study Guide、報告、FAQ）跑 dry-run，看切頁規則哪裡要補。

@@ -64,18 +64,38 @@ export function libraryCardsReady(value: unknown): boolean {
 interface LibraryDependencies { summarize?: typeof extractLocalSummary; render?: typeof renderCard }
 
 /** Rendering is an optional artifact step: its failure cannot invalidate text or block subtitles. */
-async function renderLibraryCards(id: string, contentId: string, summary: Summary, metadata: VideoMetadata, render: typeof renderCard): Promise<boolean> {
+async function renderLibraryCards(id: string, contentId: string, fallbackSummary: Summary, metadata: VideoMetadata, render: typeof renderCard): Promise<boolean> {
   const db = getDb();
-  db.prepare("UPDATE summaries SET status='done', pipeline_stage='library_rendering' WHERE id=?").run(id);
+  // 跟 regenerate-cards 共用同一個 card_render_token 原子取鎖：兩邊都拿不到對方的鎖，
+  // 匯入外部分析在鎖被持有時也會被擋（409）。鎖到手後才讀最新摘要，發布與失敗清理都只認自己的鎖，
+  // 所以另一個 worker 先發布、清鎖後，這裡不會再用舊摘要的圖蓋掉它。重啟時 recoverLocalLibraryJobs 會清掉殘留的鎖。
+  // 不引入 node:crypto：既有測試的 VM harness 只放行固定模組；鎖只需要在同一列上唯一。
+  const token = `library-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  // startLocalYoutubeLibrary 會先把已完成字幕的列標成 library_rendering 讓 UI 立刻輪詢，
+  // 所以這裡只以 token 是否為空當鎖；regenerate-cards 持鎖時 token 不為空，一樣拿不到。
+  const claimed = db.prepare("UPDATE summaries SET card_render_token=?, status='done', pipeline_stage='library_rendering' WHERE id=? AND card_render_token IS NULL").run(token, id);
+  if (claimed.changes !== 1) {
+    const current = db.prepare('SELECT card_paths FROM summaries WHERE id=?').get(id) as Pick<SummaryRow, 'card_paths'> | undefined;
+    return libraryCardsReady(current?.card_paths);
+  }
+  const latest = db.prepare('SELECT summary, card_style FROM summaries WHERE id=?').get(id) as Pick<SummaryRow, 'summary' | 'card_style'> | undefined;
+  let summary = fallbackSummary;
+  if (latest?.summary) { try { summary = ensureSummaryShape(JSON.parse(latest.summary) as Partial<Summary>); } catch { /* keep the summary this job produced */ } }
   try {
-    const row = db.prepare('SELECT card_style FROM summaries WHERE id=?').get(id) as Pick<SummaryRow, 'card_style'>;
-    const slides = await render(summary, metadata, path.join(process.cwd(), 'public', 'cards', contentId), resolveCardStyle(row.card_style));
+    // 每次工作有自己的目錄：舊 renderer 就算在 recovery 清鎖後才寫完，也不會覆蓋別人已發布的 PNG。
+    const version = `library-${token.slice('library-'.length)}`;
+    const slides = await render(summary, metadata, path.join(process.cwd(), 'public', 'cards', contentId, version), resolveCardStyle(latest?.card_style ?? null));
     if (!slides.length) throw new Error('No rendered cards');
-    const publicPaths = slides.map((_, i) => `/cards/${contentId}/slide-${i + 1}.png`);
-    db.prepare("UPDATE summaries SET card_paths=?, slide_count=?, error=NULL, pipeline_stage='summary_ready' WHERE id=?").run(JSON.stringify(publicPaths), publicPaths.length, id);
+    const publicPaths = slides.map((_, i) => `/cards/${contentId}/${version}/slide-${i + 1}.png`);
+    const committed = db.prepare("UPDATE summaries SET card_paths=?, slide_count=?, error=NULL, pipeline_stage='summary_ready', card_render_token=NULL WHERE id=? AND card_render_token=?").run(JSON.stringify(publicPaths), publicPaths.length, id, token);
+    if (committed.changes !== 1) {
+      // 鎖已被重啟復原清掉：不發布這批可能過時的圖，交給使用者重試。
+      const current = db.prepare('SELECT card_paths FROM summaries WHERE id=?').get(id) as Pick<SummaryRow, 'card_paths'> | undefined;
+      return libraryCardsReady(current?.card_paths);
+    }
     return true;
   } catch {
-    db.prepare("UPDATE summaries SET error=?, pipeline_stage='summary_ready', status='done' WHERE id=?").run(CARD_RENDER_ERROR, id);
+    db.prepare("UPDATE summaries SET error=?, pipeline_stage='summary_ready', status='done', card_render_token=NULL WHERE id=? AND card_render_token=?").run(CARD_RENDER_ERROR, id, token);
     return false;
   }
 }

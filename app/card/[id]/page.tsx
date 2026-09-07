@@ -12,7 +12,9 @@ import { canBurnSubtitleTrack, mediaFailureMessage, mediaResponse, pollMediaTask
 import { segmentsToSrt } from "@/lib/pipeline/generate-srt";
 import AttachOriginalVideo from "@/components/AttachOriginalVideo";
 import CardStylePanel from "@/components/CardStylePanel";
+import AnalysisImportPanel, { formatImportedAt, type ExternalAnalysisMeta } from "@/components/AnalysisImportPanel";
 import LearningAnalysisPanel from "@/components/LearningAnalysisPanel";
+import SubtitleReviewPanel from "@/components/SubtitleReviewPanel";
 import { BACKGROUNDS, CARD_THEMES, FONT_PRESETS, resolveCardStyle, type CardStyle } from "@/lib/card-style";
 
 export default function CardDetailPage() {
@@ -20,7 +22,7 @@ export default function CardDetailPage() {
   const id = params.id as string;
   const [data, setData] = useState<Record<string, unknown> | null>(null);
   const [currentSlide, setCurrentSlide] = useState(0);
-  const [view, setView] = useState<"carousel" | "transcript" | "learning">("carousel");
+  const [view, setView] = useState<"carousel" | "transcript" | "learning" | "review">("carousel");
   const [loading, setLoading] = useState(true);
   const [initialSeekSec, setInitialSeekSec] = useState<number | null>(null);
   const [regenerating, setRegenerating] = useState(false);
@@ -35,6 +37,7 @@ export default function CardDetailPage() {
   const subtitleResumeUntil = useRef(0);
   const mediaActionRef = useRef<AbortController | null>(null);
   const [stylePanelOpen, setStylePanelOpen] = useState(false);
+  const [importPanelOpen, setImportPanelOpen] = useState(false);
   const [styleError, setStyleError] = useState("");
   const [styleNotice, setStyleNotice] = useState("");
   const [featuredSaving, setFeaturedSaving] = useState(false);
@@ -42,6 +45,8 @@ export default function CardDetailPage() {
   const [openingAivanStudio, setOpeningAivanStudio] = useState(false);
   const [learningVisited, setLearningVisited] = useState(false);
   const [playerCurrentTime, setPlayerCurrentTime] = useState(0);
+  // 放在所有既有 state 之後：UI 測試以呼叫順序餵初始狀態，插在中間會讓後面的 state 錯位。
+  const [reviewVisited, setReviewVisited] = useState(false);
   const playerSeekRef = useRef<((s: number) => void) | null>(null);
   const burnPollRef = useRef<AbortController | null>(null);
   const regenPollRef = useRef<AbortController | null>(null);
@@ -160,6 +165,15 @@ export default function CardDetailPage() {
   }
 
   const activeStyle = resolveCardStyle(data.card_style as string | Partial<CardStyle> | null | undefined);
+  // 圖卡內容若由外部分析（NotebookLM）貼入，DB 會留一份紀錄；這裡只取來源與時間，不把全文放進頁面狀態。
+  const externalAnalysis: ExternalAnalysisMeta | null = (() => {
+    const raw = data.external_analysis;
+    if (typeof raw !== "string" || !raw) return null;
+    try {
+      const value = JSON.parse(raw) as Partial<ExternalAnalysisMeta>;
+      return value && typeof value.imported_at === "string" ? { provider: String(value.provider || "notebooklm"), imported_at: value.imported_at } : null;
+    } catch { return null; }
+  })();
   const summary = data.summary as Record<string, unknown> | null;
   const cardPaths = (data.card_paths as string[]) || [];
   const segments = (data.segments as { start: number; end: number; text: string }[]) || [];
@@ -485,6 +499,12 @@ export default function CardDetailPage() {
                   className="min-h-11 rounded-lg border border-stone-300 bg-white px-4 py-2 text-base font-bold text-stone-800 hover:bg-stone-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-700 disabled:cursor-not-allowed disabled:opacity-50"
                   title="分別選擇配色、字型與背景，先預覽再套用">樣式</button>
                 <button type="button"
+                  onClick={() => { setStyleError(""); setStyleNotice(""); setImportPanelOpen(true); }}
+                  disabled={regenerating || renderingCards}
+                  aria-haspopup="dialog" aria-expanded={importPanelOpen}
+                  className="min-h-11 rounded-lg border border-stone-300 bg-white px-4 py-2 text-base font-bold text-stone-800 hover:bg-stone-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  title="把 NotebookLM 的繁中分析貼進來，切成 20 頁後以目前樣式重畫">貼入 NotebookLM 分析</button>
+                <button type="button"
                   onClick={() => {
                     if (confirm("以目前已套用的樣式重畫完整 20 張。只重畫既有內容，不翻譯或呼叫模型。要開始嗎？")) {
                       void handleRegenerateCards(activeStyle).catch(error => setStyleError(error instanceof Error ? error.message : "重畫未完成，原有圖卡仍保留。"));
@@ -524,6 +544,13 @@ export default function CardDetailPage() {
                 className={`min-h-11 rounded-md px-4 py-2 text-sm font-bold transition-colors ${view === "learning" ? "bg-white text-orange-700 shadow-sm" : "text-gray-600 hover:text-gray-800"}`}>
                 證據學習
               </button>
+              {isTranslated && (
+                <button type="button" onClick={() => { setReviewVisited(true); setView("review"); }} aria-pressed={view === "review"}
+                  className={`min-h-11 rounded-md px-4 py-2 text-sm font-bold transition-colors ${view === "review" ? "bg-white text-orange-700 shadow-sm" : "text-gray-600 hover:text-gray-800"}`}
+                  title="整段話語重譯，逐句採用後才寫回字幕">
+                  語意校訂
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -549,12 +576,44 @@ export default function CardDetailPage() {
             <span data-style-axis="palette" className="inline-flex min-h-8 items-center gap-2 rounded-full border border-stone-200 bg-white px-3 py-1 text-sm font-medium text-stone-700"><span aria-hidden="true" className="h-3 w-3 rounded-full" style={{ background: CARD_THEMES[activeStyle.palette].accent }} />配色 · {CARD_THEMES[activeStyle.palette].label}</span>
             <span data-style-axis="font" className="rounded-full border border-stone-200 bg-white px-3 py-1 text-sm font-medium text-stone-700">字型 · {FONT_PRESETS[activeStyle.fontPreset].label}</span>
             <span data-style-axis="background" className="rounded-full border border-stone-200 bg-white px-3 py-1 text-sm font-medium text-stone-700">背景 · {BACKGROUNDS[activeStyle.background].label}</span>
+            {externalAnalysis && <span data-card-source="external" className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-800">內容 · {externalAnalysis.provider === "notebooklm" ? "NotebookLM" : externalAnalysis.provider}（{formatImportedAt(externalAnalysis.imported_at)}）</span>}
           </div>
           {styleError && <p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-base leading-7 text-red-800">{styleError}</p>}
           {styleNotice && <p role="status" className="mt-3 text-base leading-7 text-emerald-800">{styleNotice}</p>}
         </div>
 
         {stylePanelOpen && <CardStylePanel key={id} id={id} activeStyle={activeStyle} onCancel={() => setStylePanelOpen(false)} onApply={handleRegenerateCards} />}
+        {importPanelOpen && <AnalysisImportPanel key={id} id={id} external={externalAnalysis} onCancel={() => setImportPanelOpen(false)}
+          onImported={async () => {
+            // 內容已寫進資料庫；面板關掉後，重畫若失敗必須在頁面上看得到，不能吞掉。
+            setImportPanelOpen(false);
+            try {
+              await refresh();
+              setStyleNotice("已匯入 NotebookLM 分析，正在以目前樣式重畫 20 張。");
+              await handleRegenerateCards(activeStyle);
+              setStyleNotice("已用 NotebookLM 分析重畫完整 20 張圖卡。");
+            } catch (error) {
+              setStyleNotice("");
+              setStyleError(`分析已儲存，但圖卡尚未重畫：${error instanceof Error ? error.message : "重畫未完成。"} 可按「重新生成圖卡」重試。`);
+            }
+          }}
+          onReverted={async () => {
+            setImportPanelOpen(false);
+            try {
+              await refresh();
+              setStyleNotice("已還原匯入前的內容，正在重畫 20 張。");
+              await handleRegenerateCards(activeStyle);
+              setStyleNotice("已還原並重畫完整 20 張圖卡。");
+            } catch (error) {
+              setStyleNotice("");
+              setStyleError(`內容已還原，但圖卡尚未重畫：${error instanceof Error ? error.message : "重畫未完成。"} 可按「重新生成圖卡」重試。`);
+            }
+          }} />}
+
+        {reviewVisited && <div hidden={view !== "review"}><SubtitleReviewPanel key={id} id={id} active={view === "review"} onChanged={() => { void refresh(); }} onSeek={(seconds) => {
+          setInitialSeekSec(seconds);
+          setView("carousel");
+        }} /></div>}
 
         {learningVisited && <div hidden={view !== "learning"}><LearningAnalysisPanel key={id} id={id} onSeek={(seconds) => {
           setInitialSeekSec(seconds);
@@ -752,8 +811,16 @@ export default function CardDetailPage() {
                           {subtitleFilesComplete && isTranslated && srtBiPath && srtBiPath !== srtZhPath && (
                             <a href={srtBiPath} download className="rounded-md bg-purple-50 px-3 py-2 text-sm font-bold text-purple-700 hover:bg-purple-100">雙語 SRT</a>
                           )}
+                          {segments.length > 0 && (
+                            <a href={`/api/summaries/${encodeURIComponent(id)}/notebooklm-source?lang=${subtitleFilesComplete && isTranslated ? "bi" : "en"}`} download
+                              className="rounded-md bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-800 hover:bg-emerald-100"
+                              title="逐句英文加繁中譯文，各帶時間戳；上傳 NotebookLM 當來源，回答會引用台灣用語譯文與影片位置">
+                              NotebookLM 來源包{subtitleFilesComplete && isTranslated ? "（雙語）" : "（英文）"}
+                            </a>
+                          )}
                         </div>
                         {!subtitleFilesComplete && <p className="mt-2 text-xs text-gray-600">中譯尚未全部完成，目前只提供原文；完成後才提供中譯／雙語 SRT。</p>}
+                        {segments.length > 0 && <p className="mt-2 text-xs text-gray-600">NotebookLM 來源包是純文字檔，上傳到 NotebookLM 當第二個來源，提問時它會引用帶時間戳的譯文。</p>}
                       </section>
                     )}
                     <div className="mt-3">

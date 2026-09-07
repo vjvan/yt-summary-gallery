@@ -135,6 +135,8 @@ export interface Summary {
   social_cards: SocialCard[];
   video_genre: VideoGenre;
   prompt_version?: string;
+  /** 圖卡內容來源：未設代表本機或雲端萃取；external:<provider> 代表由外部分析貼入。 */
+  social_cards_source?: string;
 }
 
 /**
@@ -156,6 +158,7 @@ export function ensureSummaryShape(raw: Partial<Summary>): Summary {
     social_cards: normalizeSocialCards(raw.social_cards),
     video_genre: (raw.video_genre as VideoGenre) || "other",
     prompt_version: raw.prompt_version, // 不 default 成 PROMPT_VERSION,保留 null 以便辨識「未經 augment 的舊資料」
+    social_cards_source: typeof raw.social_cards_source === "string" && raw.social_cards_source ? raw.social_cards_source : undefined,
   };
 }
 

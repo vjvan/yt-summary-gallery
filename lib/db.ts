@@ -57,6 +57,8 @@ export function getDb() {
     addCol("srt_zh_path", "TEXT");
     addCol("srt_bi_path", "TEXT");
     addCol("burned_video_url", "TEXT");
+    // 外部分析貼入（NotebookLM 等）的原文與還原用備份，見 lib/pipeline/import-analysis.ts
+    addCol("external_analysis", "TEXT");
     // Burn 流程獨立於主 pipeline,不阻塞 status=done
     addCol("burn_status", "TEXT");
     addCol("burn_error", "TEXT");
@@ -217,4 +219,5 @@ export interface SummaryRow {
   burned_en_url: string | null;
   burn_track: string | null;
   auto_burn: string | null;
+  external_analysis: string | null;
 }
