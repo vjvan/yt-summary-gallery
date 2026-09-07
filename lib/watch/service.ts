@@ -5,15 +5,17 @@ import { fetchWatchSource, canonicalYouTubeUrl } from './source';
 import { selectWindow } from './cues';
 import { TRANSLATION_VERSION, translateWatchWindow } from './translator';
 import { WatchStore, translationMatchesSource } from './store';
-import { WatchError } from './errors';
+import { WatchError, LOCAL_QUALITY_REASONS, safeLocalQualityReason } from './errors';
 import { withVideoTermbase } from './termbase';
 import type { WatchSessionView, WatchSource, WatchWindowResult, WatchLimits, WatchProviderInfo, WatchCue, WatchCueFailure, TranslatedCue } from './types';
 import { watchProviderInfo, watchProviderStatus } from './provider';
+import { hasOrdinaryReactVerb } from './protected-terms';
 
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 // Only local cache semantics change. Existing cloud window keys/cost units remain unchanged.
 const LOCAL_CUE_CACHE_SCHEMA = 'validated-source-cue-v1';
-const cueKey = (prefix: string, cue: WatchCue) => `${prefix}:cue:${cue.id}`;
+const reactSenseSuffix = (cue: WatchCue, glossary: Glossary) => hasOrdinaryReactVerb(cue, glossary) ? ':react-verb-v1' : '';
+const cueKey = (prefix: string, cue: WatchCue, glossary: Glossary) => `${prefix}:cue:${cue.id}${reactSenseSuffix(cue, glossary)}`;
 const boundedLimit = (value: string | undefined, fallback: number, max: number) => {
   const n = Number(value); return Number.isInteger(n) && n > 0 ? Math.min(n, max) : fallback;
 };
@@ -83,7 +85,7 @@ export class WatchService {
     };
     this.sessions.set(sessionId, session);
     const cachedCues = provider.processingMode === 'local'
-      ? source.cues.flatMap(cue => { const cached = this.deps.store.getCue(cueKey(session.cachePrefix, cue), cue); return cached ? [cached] : []; })
+      ? source.cues.flatMap(cue => { const cached = this.deps.store.getCue(cueKey(session.cachePrefix, cue, session.glossary), cue); return cached ? [cached] : []; })
       : undefined;
     return { ...source, ...provider, sessionId, glossaryVersion, translationEnabled: this.deps.enabled() && provider.translationConfigured && (provider.translationReady ?? true), limits: this.limits(provider),
       ...(cachedCues ? { cachedCues } : {}) };
@@ -107,8 +109,10 @@ export class WatchService {
     }
     const selected = selectWindow(session.source.cues, time);
     const { windowKey, targets, before, after } = selected;
-    const key = `${session.cachePrefix}:${windowKey}`;
     const local = provider.processingMode === 'local';
+    // An affected old complete window must not bypass the corrected per-cue key.
+    // All other cue/window keys, including every cloud key, remain unchanged.
+    const key = `${session.cachePrefix}:${windowKey}${local && targets.some(cue => hasOrdinaryReactVerb(cue, session.glossary)) ? ':react-verb-v1' : ''}`;
     const cached = local ? this.deps.store.getMatching(key, targets) : this.deps.store.get(key);
     const result = (cues: WatchWindowResult['cues'], cache: boolean, failedCues: WatchCueFailure[] = []): WatchWindowResult => ({
       sessionId: id, windowKey, cues, cached: failedCues.length ? false : cache,
@@ -122,7 +126,7 @@ export class WatchService {
     const savedCues = new Map<string, TranslatedCue>();
     if (local) {
       for (const cue of targets) {
-        const saved = this.deps.store.getCue(cueKey(session.cachePrefix, cue), cue);
+        const saved = this.deps.store.getCue(cueKey(session.cachePrefix, cue, session.glossary), cue);
         if (saved) savedCues.set(cue.id, saved);
       }
       // Reconstruct complete windows from validated cue cache without reserving work.
@@ -164,14 +168,15 @@ export class WatchService {
                 throw new WatchError('INVALID_TRANSLATION', '回傳字幕格式或來源不符，未寫入成功快取。', 502);
               }
               // Completed/validated before cancellation is durable; nothing writes after abort.
-              this.deps.store.putCue(cueKey(session.cachePrefix, cue), cue, translated[0]);
+              this.deps.store.putCue(cueKey(session.cachePrefix, cue, session.glossary), cue, translated[0]);
               savedCues.set(cue.id, translated[0]);
             } catch (error) {
               assertActive();
               if (!(error instanceof WatchError) || error.code !== 'LOCAL_TRANSLATION_QUALITY') throw error;
               // Public failure metadata is source-owned; never leak model output in messages.
+              const reason = safeLocalQualityReason(error.qualityReason);
               failedCues.push({ id: cue.id, start: cue.start, end: cue.end, code: 'LOCAL_TRANSLATION_QUALITY',
-                message: '本句譯文未通過品質檢查；已保留原文，可手動重試此區段。' });
+                reason, message: `本句${LOCAL_QUALITY_REASONS[reason]}；已保留原文，可手動重試此區段。` });
             }
           }
           assertActive();

@@ -23,6 +23,7 @@
 
 # next.js
 /.next/
+/.next-before-*/
 /out/
 
 # production
@@ -51,3 +52,15 @@ next-env.d.ts
 # Premium GPT prompts (Layer 2 護城河:不進 git)
 prompts/*.txt
 
+# Session-only experiments: real subtitle excerpts, private review notes,
+# and smoke scripts coupled to one local database. Keep them on this Mac.
+/docs/translation-calibration-v18.md
+/scripts/translation-calibration.ts
+/scripts/translation-calibration-fixture.json
+/tests/translation-calibration.test.ts
+/scripts/learning-extraction-debug.ts
+/scripts/verify-learning-api.mjs
+/scripts/verify-style-api.mjs
+/scripts/verify-style-apply.mjs
+/scripts/verify-style-browser.mjs
+/scripts/verify-style-render.ts

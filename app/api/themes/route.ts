@@ -1,20 +1,14 @@
 import { NextResponse } from "next/server";
-import { CARD_THEMES } from "@/lib/pipeline/render-card";
+import { CARD_THEMES, FONT_PRESETS, BACKGROUNDS, DEFAULT_CARD_STYLE } from "@/lib/card-style";
 
-/**
- * GET /api/themes
- *
- * 列出所有可用 carousel 配色 theme,給 card 詳情頁的「換配色」picker 用。
- */
+/** Three independent style axes. `themes` remains for one compatibility release. */
 export async function GET() {
+  const palettes = Object.values(CARD_THEMES);
   return NextResponse.json({
-    themes: Object.values(CARD_THEMES).map((t) => ({
-      id: t.id,
-      label: t.label,
-      cardBg: t.cardBg,
-      accent: t.accent,
-      accentLight: t.accentLight,
-      accentDark: t.accentDark,
-    })),
+    palettes,
+    fontPresets: Object.values(FONT_PRESETS),
+    backgrounds: Object.values(BACKGROUNDS),
+    defaults: DEFAULT_CARD_STYLE,
+    themes: palettes,
   });
 }

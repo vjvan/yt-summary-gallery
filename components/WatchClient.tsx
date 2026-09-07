@@ -508,6 +508,11 @@ export default function WatchClient({ demo, initialUrl }: { demo: boolean; initi
           <Link href="/glossary" className="rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 hover:border-orange-300 hover:text-orange-600">管理專業術語 ↗</Link>
         </div>
 
+        {!demo && <section className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-950">
+          <p className="max-w-2xl leading-relaxed"><strong>想要整片摘要或燒錄字幕影片？</strong>觀看頁只疊加字幕，不下載原片。請到影片庫建立完整工作，再從影片詳情下載 SRT 或準備原片後燒錄 MP4。</p>
+          <Link href={url.trim() ? `/?url=${encodeURIComponent(url.trim())}` : "/"} className="shrink-0 rounded-lg border border-orange-300 bg-white px-3 py-2 font-bold hover:bg-orange-100">開啟影片庫：摘要、完整字幕與燒錄 →</Link>
+        </section>}
+
         {demo && <div role="status" className="mb-5 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm leading-relaxed text-orange-900"><strong>互動示範模式：</strong>以下 5 句為內嵌示例，不是真實翻譯結果，不會呼叫 Watch API 或付費模型。滑動時間軸可測試同步字幕與右側逐字稿跟隨；手動捲動列表會暫停跟隨。 <Link href="/watch" className="font-bold underline underline-offset-2">前往正式觀看頁</Link></div>}
 
         <div role="status" className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">{processingCopy.banner}{processingCopy.local && " 本機未就緒時不會回退雲端。"}</div>

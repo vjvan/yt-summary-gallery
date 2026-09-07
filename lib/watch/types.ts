@@ -1,3 +1,4 @@
+import type { LocalQualityReason } from './errors';
 /** 即時觀看支線的共用資料契約；時間一律為影片秒數。 */
 export interface WatchCue { id: string; start: number; end: number; text: string }
 export interface TranslatedCue extends WatchCue { originalText: string }
@@ -22,6 +23,8 @@ export interface WatchSessionView extends WatchSource, WatchProviderInfo {
 export interface WatchCueFailure {
   id: string; start: number; end: number;
   code: 'LOCAL_TRANSLATION_QUALITY'; message: string;
+  /** Fixed safe classification, never raw model text or exception messages. */
+  reason?: LocalQualityReason;
 }
 export interface WatchWindowResult {
   sessionId: string; windowKey: string; cues: TranslatedCue[]; cached: boolean;

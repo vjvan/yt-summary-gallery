@@ -26,6 +26,8 @@ import {
 import { renderCard } from "./render-card";
 import { maybeAutoBurn } from "./start-burn";
 import type { TranscriptSegment, VideoMetadata } from "./fetch-transcript";
+import { resolveCardStyle } from "../card-style";
+import { recoverLocalLibraryJobs } from "./local-youtube-library";
 
 const RESUMABLE_STAGES = new Set(["transcribed", "translated", "summarized"]);
 
@@ -144,7 +146,7 @@ export async function resumeSummaryPipeline(rowId: string): Promise<void> {
     transcript_source: row.transcript_source || "whisper",
   };
   const cardDir = path.join(projectRoot, "public", "cards", contentId);
-  const slidePaths = await renderCard(summary, metadata, cardDir);
+  const slidePaths = await renderCard(summary, metadata, cardDir, resolveCardStyle(row.card_style));
   const publicPaths = slidePaths.map((_, i) => `/cards/${contentId}/slide-${i + 1}.png`);
 
   db.prepare(
@@ -160,6 +162,7 @@ export async function resumeSummaryPipeline(rowId: string): Promise<void> {
  * (register() 必須在 server 開始服務前完成,所以續跑不能 await)。
  */
 export function recoverZombieJobs(): void {
+  recoverLocalLibraryJobs();
   const db = getDb();
 
   const processing = db

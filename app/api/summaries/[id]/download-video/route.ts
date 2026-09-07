@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, SummaryRow } from "@/lib/db";
 import { fetchVideoFromUrl } from "@/lib/pipeline/fetch-video-url";
-import path from "path";
+import { mediaFailureMessage } from "@/lib/media-export-client";
+import { acquireMediaOperation, activeMediaOperation, releaseMediaOperation } from "@/lib/pipeline/media-operation";
+
+// One process-local task per row. Reopening the card must not start a duplicate download.
+const pendingDownloads = new Set<string>();
 
 /**
  * POST /api/summaries/{id}/download-video
@@ -31,6 +35,26 @@ export async function POST(
     return NextResponse.json({ status: "done", video_url: row.video_url });
   }
 
+  if (pendingDownloads.has(row.id)) return NextResponse.json({ status: "downloading" }, { status: 202 });
+  if (row.burn_status === "burning") return NextResponse.json({ error: "字幕燒錄進行中，請稍後準備原片。", code: "MEDIA_BUSY" }, { status: 409 });
+  const mediaToken = acquireMediaOperation(db, row.id, "download");
+  if (!mediaToken) {
+    return activeMediaOperation(db, row.id) === "download"
+      ? NextResponse.json({ status: "downloading" }, { status: 202 })
+      : NextResponse.json({ error: "正在附加原片，請勿同時下載。", code: "MEDIA_BUSY" }, { status: 409 });
+  }
+  const latest = db.prepare("SELECT * FROM summaries WHERE id = ?").get(row.id) as SummaryRow | undefined;
+  if (!latest || latest.video_url || latest.burn_status === "burning") {
+    releaseMediaOperation(db, row.id, mediaToken);
+    return latest?.video_url
+      ? NextResponse.json({ status: "done", video_url: latest.video_url })
+      : NextResponse.json({ error: "摘要或原片工作已變更，請重新整理。", code: "MEDIA_BUSY" }, { status: 409 });
+  }
+  // A prior download failure must not make the new, explicitly requested attempt
+  // look failed before it starts. Leave unrelated summary errors intact.
+  if (row.error?.startsWith("download-video:")) db.prepare("UPDATE summaries SET error = NULL WHERE id = ?").run(row.id);
+
+  pendingDownloads.add(row.id);
   const url = row.url;
   const videoId = row.video_id;
   const summaryRowId = row.id;
@@ -39,16 +63,19 @@ export async function POST(
     try {
       const result = await fetchVideoFromUrl(url, videoId, process.cwd());
       getDb()
-        .prepare(`UPDATE summaries SET video_url = ?, is_video = 1 WHERE id = ?`)
+        .prepare(`UPDATE summaries SET video_url = ?, is_video = 1 WHERE id = ? AND (video_url IS NULL OR video_url = '')`)
         .run(result.publicVideoUrl, summaryRowId);
     } catch (err) {
-      console.error("[download-video] yt-dlp 失敗:", err);
+      console.error("[download-video] 原片下載失敗，未自動重試。");
       // 寫入錯誤狀態方便前端 polling 知道掛了
       try {
         getDb()
           .prepare(`UPDATE summaries SET error = ? WHERE id = ?`)
-          .run(`download-video: ${(err as Error).message}`.slice(0, 500), summaryRowId);
+          .run(`download-video: ${mediaFailureMessage(err instanceof Error ? err.message : "", "download")}`, summaryRowId);
       } catch { /* swallow */ }
+    } finally {
+      pendingDownloads.delete(summaryRowId);
+      releaseMediaOperation(db, summaryRowId, mediaToken);
     }
   })().catch(() => { /* swallow */ });
 

@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, type SummaryRow } from "@/lib/db";
 import { ensureSummaryShape, type Summary } from "@/lib/pipeline/extract-summary";
-import { buildAivanProject, type TranscriptSegment } from "@/lib/pipeline/build-aivan-project";
+import { buildAivanProject, applyCanonicalProjectStyle, type TranscriptSegment } from "@/lib/pipeline/build-aivan-project";
 import type { VideoMetadata } from "@/lib/pipeline/fetch-transcript";
+import { resolveCardStyle, cardStyleOverrides, CardStyleError } from "@/lib/card-style";
 import {
   AivanProjectConflictError,
   AivanProjectValidationError,
@@ -124,13 +125,20 @@ export async function GET(
   };
 
   const sp = req.nextUrl.searchParams;
+  let style;
+  try {
+    style = resolveCardStyle(row.card_style, cardStyleOverrides(sp));
+  } catch (error) {
+    if (error instanceof CardStyleError) return NextResponse.json({ error: error.message }, { status: 400, headers });
+    throw error;
+  }
   const baseProject = buildAivanProject(summary, metadata, {
     projectId: `yt-${row.video_id}`,
     sourceUrl: new URL(`/card/${row.id}`, req.nextUrl.origin).href,
     sourceType: row.source || "youtube",
     originalUrl: row.url,
     createdAt: row.created_at,
-    themeOverride: sp.get("theme") || undefined,
+    cardStyle: style,
     includeRecall: sp.get("recall") === "1",
     transcriptSegments: parseSegments(row.segments_zh || row.segments),
     watermark: process.env.CARD_WATERMARK || "vjvan.com · P2P AI Lab",
@@ -150,6 +158,8 @@ export async function GET(
       project = baseProject as Record<string, unknown>;
     }
   }
+
+  project = applyCanonicalProjectStyle(project, baseProject);
 
   // 來源與證據永遠由 YT Summary 重新提供，避免草稿偽造或凍結來源 metadata。
   project.schemaVersion = baseProject.schemaVersion;

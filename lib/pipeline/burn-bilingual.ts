@@ -4,14 +4,14 @@
  * 輸入:原始影片 + segments(原文) + segments_zh(中譯,可選)
  * 輸出:三個 SRT 檔 + 一支燒了雙語字幕的 mp4
  *
- * 雙語規則:每段字幕兩行,上 = 原文,下 = 中譯。
+ * 雙語規則:每段字幕先中譯、後原文；繁體中文在上，英文在下。
  * 若 segments_zh 為 null(原始就是中文),只產一份中文 SRT,單語燒錄。
  */
 
 import fs from "fs";
 import path from "path";
 import { run } from "./run-command";
-import { segmentsToSrt, segmentsToVtt } from "./generate-srt";
+import { assertValidSubtitleSegments, segmentsToSrt, segmentsToVtt } from "./generate-srt";
 
 /**
  * Homebrew 的標準 ffmpeg 沒帶 libass,subtitles filter 不存在。
@@ -30,6 +30,12 @@ function resolveFfmpegWithSubtitles(): string {
   return "ffmpeg"; // fallback,大概率失敗,但讓使用者看到錯誤訊息
 }
 
+/** PingFang's reserved CoreText path can exist in metadata but be unreadable to libass.
+ * Prefer the installed, readable Traditional Chinese system family on this Mac. */
+export function subtitleFontFamily(exists: (file: string) => boolean = fs.existsSync): string {
+  return exists("/System/Library/Fonts/STHeiti Medium.ttc") ? "Heiti TC" : "PingFang TC";
+}
+
 interface Segment {
   start: number;
   end: number;
@@ -46,15 +52,19 @@ export interface BurnResult extends SubtitleFiles {
   burnedVideoPath: string;
 }
 
-function buildBilingualSegments(en: Segment[], zh: Segment[]): Segment[] {
-  // 假設 en 與 zh 是一對一(translateSegments 保證 index 對齊)
-  const len = Math.min(en.length, zh.length);
+export function buildBilingualSegments(en: Segment[], zh: Segment[]): Segment[] {
+  assertValidSubtitleSegments(en);
+  assertValidSubtitleSegments(zh);
+  if (en.length !== zh.length || en.some((seg, index) => seg.start !== zh[index].start || seg.end !== zh[index].end)) {
+    throw new Error("原文與譯文字幕數量或時間不一致，已停止匯出；不會略過缺句。");
+  }
+  const len = en.length;
   const out: Segment[] = [];
   for (let i = 0; i < len; i++) {
     out.push({
       start: en[i].start,
       end: en[i].end,
-      text: `${en[i].text}\n${zh[i].text}`,
+      text: `${zh[i].text}\n${en[i].text}`,
     });
   }
   return out;
@@ -76,7 +86,8 @@ function escapeForFfmpegFilter(p: string): string {
 
 /**
  * 用 ffmpeg subtitles filter 將 SRT 燒進影片。
- * style 強制 PingFang TC + 白字 + 黑邊 + 底部對齊。
+ * style 使用可讀的繁中字型 + 白字 + 黑邊 + 底部對齊。
+ * libass 沿用 SRT 的文字行序：雙語為繁體中文在上、英文在下；不改寫既有字幕或燒錄輸出。
  *
  * 注意 escape:
  * - filename 中 ":" 要 escape 成 "\:"
@@ -91,7 +102,7 @@ async function burnSubtitle(
   const ffmpeg = resolveFfmpegWithSubtitles();
   const escapedPath = escapeForFfmpegFilter(srtPath);
   const styleParts = [
-    "FontName=PingFang TC",
+    `FontName=${subtitleFontFamily()}`,
     "FontSize=20",
     "PrimaryColour=&HFFFFFF&",
     "OutlineColour=&H000000&",
@@ -132,6 +143,9 @@ export interface SubtitleInput {
  */
 export function writeSubtitleFiles(input: SubtitleInput): SubtitleFiles {
   const { segments, segmentsZh, wasTranslated, outputDir, contentId } = input;
+  assertValidSubtitleSegments(segments);
+  if (wasTranslated && (!segmentsZh || segmentsZh.length !== segments.length)) throw new Error("原文與譯文字幕數量不一致，已停止匯出。");
+  const bilingual = wasTranslated ? buildBilingualSegments(segments, segmentsZh!) : null;
   fs.mkdirSync(outputDir, { recursive: true });
 
   let srtEnPath: string | null = null;
@@ -152,7 +166,7 @@ export function writeSubtitleFiles(input: SubtitleInput): SubtitleFiles {
 
     writeBoth(srtEnPath, segments);
     writeBoth(srtZhPath, segmentsZh);
-    writeBoth(srtBiPath, buildBilingualSegments(segments, segmentsZh));
+    writeBoth(srtBiPath, bilingual!);
   } else {
     srtBiPath = path.join(outputDir, `${contentId}.srt`);
     srtZhPath = srtBiPath;
@@ -178,8 +192,16 @@ export async function burnSubtitleToVideo(input: BurnInput): Promise<string> {
   const { videoPath, srtPath, outputDir, contentId, hwaccel = true, outputSuffix = "" } = input;
   fs.mkdirSync(outputDir, { recursive: true });
   const burnedVideoPath = path.join(outputDir, `${contentId}.burned${outputSuffix}.mp4`);
-  await burnSubtitle(videoPath, srtPath, burnedVideoPath, hwaccel);
-  return burnedVideoPath;
+  const pendingPath = path.join(outputDir, `${contentId}.pending${outputSuffix}.mp4`);
+  try {
+    await burnSubtitle(videoPath, srtPath, pendingPath, hwaccel);
+    if (!fs.existsSync(pendingPath) || fs.statSync(pendingPath).size === 0) throw new Error("燒錄未產生有效影片。");
+    fs.renameSync(pendingPath, burnedVideoPath);
+    return burnedVideoPath;
+  } catch (error) {
+    fs.rmSync(pendingPath, { force: true });
+    throw error;
+  }
 }
 
 /**

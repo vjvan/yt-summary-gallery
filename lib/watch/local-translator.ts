@@ -49,6 +49,13 @@ export async function requestLocalTranslation(input: {
     // A provider-confirmed output limit is a content failure, not a network
     // failure. Never return or salvage its possibly valid-looking JSON prefix.
     if (!result.error && result.done === true && result.done_reason === 'length') throw new WatchError('LOCAL_TRANSLATION_TRUNCATED', '本機翻譯輸出達到安全長度上限，尚未完整完成。', 502);
+    // Some local generations return a partial content envelope even with
+    // stream:false. Discard it, but distinguish observed unfinished generation
+    // from an unavailable provider. Never reinterpret unknown stop reasons.
+    if (response.status === 200 && !result.error && result.done === false && result.done_reason === undefined
+      && typeof result.message?.content === 'string' && result.message.content.trim()) {
+      throw new WatchError('LOCAL_TRANSLATION_INCOMPLETE', '本機模型已產生部分內容但未完成；未採用任何部分譯文。', 502);
+    }
     if (result.error || result.done !== true || (result.done_reason !== undefined && result.done_reason !== 'stop')
       || typeof result.message?.content !== 'string' || !result.message.content.trim()) {
       throw new WatchError('LOCAL_MODEL_FAILED', '本機翻譯輸出未完整完成，這一批未寫入成功快取。', 502);

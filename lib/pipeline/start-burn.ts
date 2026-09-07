@@ -13,7 +13,9 @@
 import path from "path";
 import fs from "fs";
 import { getDb, SummaryRow } from "@/lib/db";
+import { canBurnSubtitleTrack, mediaFailureMessage } from "../media-export-client";
 import { burnSubtitleToVideo } from "./burn-bilingual";
+import { activeMediaOperation } from "./media-operation";
 
 export type BurnTrack = "bi" | "zh" | "en";
 
@@ -44,9 +46,14 @@ export interface StartBurnResult {
  */
 export function startBurn(row: SummaryRow, track: BurnTrack, hwaccel: boolean): StartBurnResult {
   const cfg = TRACK_CONFIG[track];
+  if (!canBurnSubtitleTrack((row as SummaryRow & { subtitle_status?: string | null }).subtitle_status, track)) {
+    return { status: 409, body: { error: "中文／雙語字幕尚未完成，請先續作字幕。" } };
+  }
 
   if (!row.is_video) return { status: 400, body: { error: "Not a video" } };
   if (!row.video_url) return { status: 400, body: { error: "No source video" } };
+  const db = getDb();
+  if (activeMediaOperation(db, row.id)) return { status: 409, body: { error: "原片下載或附加仍在進行，完成後才能燒錄。", code: "MEDIA_BUSY" } };
 
   const srtRel = row[cfg.srtCol];
   if (!srtRel) {
@@ -76,7 +83,6 @@ export function startBurn(row: SummaryRow, track: BurnTrack, hwaccel: boolean): 
     return { status: 410, body: { error: `SRT missing: ${srtPath}` } };
   }
 
-  const db = getDb();
   db.prepare("UPDATE summaries SET burn_status = 'burning', burn_error = NULL, burn_track = ? WHERE id = ?")
     .run(track, row.id);
 
@@ -97,7 +103,7 @@ export function startBurn(row: SummaryRow, track: BurnTrack, hwaccel: boolean): 
         .prepare(`UPDATE summaries SET burn_status = 'done', ${cfg.urlCol} = ? WHERE id = ?`)
         .run(publicUrl, row.id);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "burn failed";
+      const message = mediaFailureMessage(err instanceof Error ? err.message : "burn failed", "burn");
       getDb()
         .prepare("UPDATE summaries SET burn_status = 'error', burn_error = ? WHERE id = ?")
         .run(message.slice(0, 500), row.id);

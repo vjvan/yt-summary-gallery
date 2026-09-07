@@ -6,6 +6,7 @@
 import path from "path";
 import fs from "fs";
 import { run } from "./run-command";
+import { mediaFailureMessage } from "../media-export-client";
 
 export interface VideoUrlMetadata {
   videoPath: string;       // 本機 tmp mp4 完整路徑
@@ -51,8 +52,11 @@ export async function fetchVideoFromUrl(url: string, contentId: string, projectR
       { timeoutMs: 600000 }
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`yt-dlp 下載失敗:${message.slice(0, 300)}`);
+    // Classify structured stderr before truncation: a long command used to hide
+    // the actual 403. Only fixed, sanitized copy may reach the UI or database.
+    const stderr = err && typeof err === "object" && "stderr" in err && typeof err.stderr === "string" ? err.stderr : "";
+    const message = stderr.trim() ? stderr : err instanceof Error ? err.message : "";
+    throw new Error(mediaFailureMessage(message, "download"));
   }
 
   // 找實際下載出來的影片檔(可能是 .mp4 / .mkv / .webm 看 source)

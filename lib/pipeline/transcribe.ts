@@ -12,6 +12,7 @@
 
 import fs from "fs";
 import path from "path";
+import { processingMode } from "../watch/provider";
 import { run } from "./run-command";
 import type { TranscriptSegment } from "./fetch-transcript";
 
@@ -100,6 +101,10 @@ export async function transcribeAudio(
   audioPath: string,
   options: TranscribeOptions
 ): Promise<TranscribeResult> {
+  if (processingMode() === 'local') {
+    const { transcribeLocalFile } = await import('./local-file-transcribe');
+    return transcribeLocalFile(audioPath, options);
+  }
   // 1. 超限先壓縮
   let finalAudio = audioPath;
   if (fs.statSync(audioPath).size > WHISPER_LIMIT_BYTES) {

@@ -11,6 +11,7 @@
 import type { TranscriptSegment } from "./fetch-transcript";
 import { buildGlossaryPromptSection } from "./glossary";
 import { getGlossary } from "../glossary-store";
+import { processingMode } from "../watch/provider";
 // @ts-expect-error opencc-js has no type declarations
 import * as OpenCC from "opencc-js";
 
@@ -107,6 +108,10 @@ export async function translateSegments(
     return { translated: segments, wasTranslated: false };
   }
 
+  if (processingMode() === 'local') {
+    const { translateLocalLibrarySegments } = await import('./local-library-translate');
+    return { translated: await translateLocalLibrarySegments(segments), wasTranslated: true };
+  }
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return { translated: segments, wasTranslated: false };
 

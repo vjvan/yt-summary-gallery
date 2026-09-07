@@ -2,12 +2,14 @@ import { buildCaption } from "./build-caption";
 import type { Summary } from "./extract-summary";
 import {
   buildCardHtml,
+  resolveSocialCards,
   type CardTheme,
   type SlideId,
 } from "./render-card";
 import type { VideoMetadata } from "./fetch-transcript";
+import { buildStyleCss, resolveCardStyle, FONT_PRESETS, BACKGROUNDS, type CardStyle } from "../card-style";
 
-const SLIDE_TITLES: Record<SlideId, string> = {
+const SLIDE_TITLES: Record<string, string> = {
   cover: "封面",
   tldr: "60 秒看懂",
   keypoints: "重點解構",
@@ -32,6 +34,8 @@ export interface BuildAivanProjectOptions {
   originalUrl: string;
   createdAt?: string;
   themeOverride?: string;
+  cardStyle?: string | Partial<CardStyle> | null;
+  styleOverride?: Partial<CardStyle>;
   includeRecall?: boolean;
   transcriptLanguage?: string;
   outputLanguage?: string;
@@ -42,10 +46,6 @@ export interface BuildAivanProjectOptions {
 interface CardFragment {
   id: SlideId;
   html: string;
-}
-
-function escapeCssString(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\A ");
 }
 
 function extractStyle(html: string): string {
@@ -62,7 +62,7 @@ function extractScriptTail(html: string): string {
 }
 
 function extractCards(html: string): CardFragment[] {
-  const cardPattern = /<div class="card[^"]*" data-slide-id="([^"]+)">/g;
+  const cardPattern = /<(?:div|article) class="card[^"]*" data-slide-id="([^"]+)">/g;
   const matches = Array.from(html.matchAll(cardPattern));
   const scriptStart = html.indexOf('<script src="https://cdn.jsdelivr.net/npm/mermaid');
   const fallbackEnd = scriptStart >= 0 ? scriptStart : html.lastIndexOf("</body>");
@@ -85,7 +85,7 @@ function addPageIndicator(cardHtml: string, activeIndex: number, total: number):
   );
 }
 
-function studioCss(sourceCss: string, watermark: string): string {
+function studioCss(sourceCss: string): string {
   return `${sourceCss}
 
 /* AIVAN Slide Studio HTML layer overrides */
@@ -107,14 +107,14 @@ html, body {
 .card {
   margin: 0 !important;
 }
-.card::after {
-  content: "${escapeCssString(watermark)}";
+.card-watermark {
   position: absolute;
   right: 24px;
   bottom: 14px;
   z-index: 5;
-  color: rgba(0, 0, 0, 0.32);
-  font-family: 'Inter', 'Noto Sans TC', sans-serif;
+  color: currentColor;
+  opacity: .55;
+  font-family: var(--social-mono);
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.5px;
@@ -145,11 +145,24 @@ function evidenceFor(summary: Summary, segments: TranscriptSegment[]) {
   });
 }
 
+function socialCardFor(id: SlideId, summary: Summary) {
+  const match = id.match(/^social-(\d{2})$/);
+  if (!match) return null;
+  const index = Number(match[1]) - 1;
+  return resolveSocialCards(summary)[index] || null;
+}
+
+function slideTitle(id: SlideId, summary: Summary): string {
+  return socialCardFor(id, summary)?.title || SLIDE_TITLES[id] || summary.title_display;
+}
+
 function slideSummary(id: SlideId, summary: Summary): string {
+  const social = socialCardFor(id, summary);
+  if (social) return `${social.eyebrow}｜${social.body}`;
   if (id === "cover") return summary.one_liner;
   if (id === "tldr") return summary.tldr_paragraph;
   if (id === "quote") return summary.key_quote;
-  const title = SLIDE_TITLES[id];
+  const title = SLIDE_TITLES[id] || summary.title_display;
   return `${title}｜來源：${summary.title_display}`;
 }
 
@@ -159,12 +172,16 @@ function buildSlide(
   cardHtml: string,
   css: string,
   theme: CardTheme,
+  style: CardStyle,
   summary: Summary,
   total: number,
-  scriptTail: string
+  scriptTail: string,
+  watermark: string
 ) {
-  const title = id === "cover" ? summary.title_display : SLIDE_TITLES[id];
-  const html = addPageIndicator(cardHtml, index, total) + (id === "mindmap" ? `\n${scriptTail}` : "");
+  const title = id === "cover" ? summary.title_display : slideTitle(id, summary);
+  const escapeHtml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const markedHtml = cardHtml.replace(/<\/article>\s*$/, `<div class="card-watermark">${escapeHtml(watermark)}</div></article>`);
+  const html = addPageIndicator(markedHtml, index, total) + (id === "mindmap" ? `\n${scriptTail}` : "");
 
   return {
     id: `slide-${String(index + 1).padStart(2, "0")}-${id}`,
@@ -174,16 +191,17 @@ function buildSlide(
     template: "html-import",
     width: 1080,
     height: 1350,
-    bg: theme.cardBg,
-    text: "#1A1A1A",
+    bg: BACKGROUNDS[style.background].cardBg,
+    text: style.background === "ink-dark" ? "#F3F1EC" : "#17150F",
     accent: theme.accent,
     radius: 0,
-    font: "'Noto Sans TC', 'PingFang TC', sans-serif",
+    font: `"${FONT_PRESETS[style.fontPreset].body.family}"`,
     importKind: "youtube-summary-card-v1",
     metadata: {
       title,
       summary: slideSummary(id, summary),
       sourceSlideId: id,
+      cardStyle: style,
       position: index + 1,
       total,
     },
@@ -219,18 +237,19 @@ export function buildAivanProject(
   options: BuildAivanProjectOptions
 ) {
   const includeRecall = options.includeRecall ?? false;
+  const style = resolveCardStyle(options.cardStyle, {
+    ...(options.themeOverride !== undefined ? { palette: options.themeOverride } : {}),
+    ...options.styleOverride,
+  });
   const { html, theme, layout } = buildCardHtml(
     summary,
     metadata,
-    options.themeOverride,
+    style,
     includeRecall
   );
   const cards = new Map(extractCards(html).map((card) => [card.id, card.html]));
   const scriptTail = extractScriptTail(html);
-  const css = studioCss(
-    extractStyle(html),
-    options.watermark || "vjvan.com · P2P AI Lab"
-  );
+  const css = studioCss(extractStyle(html));
 
   const slides = layout.map((slideId, index) => {
     const cardHtml = cards.get(slideId);
@@ -241,14 +260,17 @@ export function buildAivanProject(
       cardHtml,
       css,
       theme,
+      style,
       summary,
       layout.length,
-      scriptTail
+      scriptTail,
+      options.watermark || "vjvan.com · P2P AI Lab"
     );
   });
 
   return {
     schemaVersion: "aivan-slide-project-v1",
+    cardStyle: style,
     id: options.projectId,
     title: summary.title_display || metadata.title,
     description: summary.one_liner,
@@ -293,10 +315,13 @@ export function buildAivanProject(
     },
     brand: {
       kitId: "aivan-default",
+      cardStyle: style,
+      fontPreset: FONT_PRESETS[style.fontPreset],
+      background: BACKGROUNDS[style.background],
       themeId: theme.id,
       themeLabel: theme.label,
       colors: {
-        background: theme.cardBg,
+        background: BACKGROUNDS[style.background].cardBg,
         accent: theme.accent,
         accentLight: theme.accentLight,
         accentDark: theme.accentDark,
@@ -304,6 +329,9 @@ export function buildAivanProject(
       watermark: options.watermark || "vjvan.com · P2P AI Lab",
     },
     import: {
+      cardStyle: style,
+      styleVariables: buildStyleCss(style).variables,
+      backgroundClass: buildStyleCss(style).backgroundClass,
       kind: "youtube-summary-card-v1",
       css,
     },
@@ -311,4 +339,48 @@ export function buildAivanProject(
     assets: [],
     exports: [],
   };
+}
+
+
+/** Apply canonical DB/query style to an existing Studio draft without replacing
+ * edited card text, inline positioning or textPatches. Only generated card CSS
+ * and background classes are refreshed; unrelated user-created layers stay put.
+ */
+export function applyCanonicalProjectStyle(
+  project: Record<string, unknown>,
+  base: ReturnType<typeof buildAivanProject>
+): Record<string, unknown> {
+  const style = base.cardStyle;
+  const backgroundClasses = new Set(Object.values(BACKGROUNDS).flatMap((bg) => bg.className.split(/\s+/)));
+  const activeClass = buildStyleCss(style).backgroundClass;
+  project.cardStyle = style;
+  project.brand = base.brand;
+  project.import = base.import;
+  if (Array.isArray(project.slides)) {
+    for (const slide of project.slides) {
+      if (!slide || typeof slide !== "object") continue;
+      const record = slide as Record<string, unknown>;
+      record.bg = BACKGROUNDS[style.background].cardBg;
+      record.font = `"${FONT_PRESETS[style.fontPreset].body.family}"`;
+      record.accent = base.brand.colors.accent;
+      record.metadata = { ...(record.metadata && typeof record.metadata === "object" ? record.metadata : {}), cardStyle: style };
+      if (!Array.isArray(record.elements)) continue;
+      for (const layer of record.elements) {
+        if (!layer || typeof layer !== "object") continue;
+        const element = layer as Record<string, unknown>;
+        if (element.type !== "html" || typeof element.html !== "string" || !element.html.includes("social-card")) continue;
+        element.css = base.import.css;
+        if (!element.html.includes('class="card-watermark"')) {
+          const watermark = base.brand.watermark.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+          element.html = element.html.replace(/<\/article>\s*$/, `<div class="card-watermark">${watermark}</div></article>`);
+        }
+        element.html = String(element.html).replace(/class="([^"]*\bsocial-card\b[^"]*)"/g, (_match, classNames: string) => {
+          if (!classNames.split(/\s+/).includes("social-card")) return _match;
+          const classes = classNames.split(/\s+/).filter((name) => name && !backgroundClasses.has(name));
+          return `class="${classes.concat(activeClass.split(/\s+/)).join(" ")}"`;
+        });
+      }
+    }
+  }
+  return project;
 }

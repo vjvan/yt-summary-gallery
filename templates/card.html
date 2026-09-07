@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=Inter:wght@400;500;700;900&display=swap');
+  /* Local-only registered font faces. Never depend on a CDN for carousel export. */
+  {{font_face_css}}
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -805,13 +806,149 @@
     font-style: italic;
   }
 
+  /* === 20 頁社群學習卡：three independent style axes ===
+     字型搭配規則：carousel templates README.md，允雷 2026-08-22 定案。
+     正文永遠使用 body 保持可讀；display 限大標，Mono 限英數標籤。
+     不用 DFKai-SB / BiauKai；所有字型透過本機 @font-face 載入。 */
+  .card:not(.social-card) { display: none; }
+  .social-card {
+    --social-content-font: var(--social-serif);
+    --social-content-weight: var(--social-body-weight);
+    --social-heading-font: var(--social-serif);
+    --social-heading-weight: var(--social-body-weight);
+    --rule: #c9cdd4;
+    background: var(--card-bg);
+    color: #17150F;
+    display: flex;
+    flex-direction: column;
+    padding: 88px 92px 84px;
+    font-family: var(--social-content-font);
+    font-synthesis: none;
+    isolation: isolate;
+  }
+  .social-card > * { position: relative; z-index: 2; }
+  .social-top-bar {
+    position: absolute; left: 0; top: 0; width: 100%; height: 10px;
+    background: var(--accent); z-index: 3;
+  }
+  .social-eyebrow, .social-page, .social-footer {
+    /* Mono lacks CJK; fallback only to this page's Chinese font (not a 3rd family). */
+    font-family: var(--social-mono), var(--social-content-font);
+    font-weight: var(--social-mono-weight);
+    letter-spacing: .08em; text-transform: uppercase;
+  }
+  .social-eyebrow { color: var(--accent); font-size: 25px; line-height: 1.2; padding-top: 18px; }
+  .social-page { position: absolute; top: 104px; right: 92px; color: rgba(23,21,15,.65); font-size: 22px; }
+  .social-main { flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 50px 0 64px; min-height: 0; }
+  .social-main h2 {
+    max-width: 880px; font: var(--social-heading-weight) var(--social-title-size)/1.18 var(--social-heading-font);
+    letter-spacing: -.035em; text-wrap: balance; overflow-wrap: anywhere;
+  }
+  .social-rule { width: 112px; height: 7px; margin: 40px 0 38px; background: var(--accent); flex-shrink: 0; }
+  .social-main p {
+    max-width: 850px; font: var(--social-body-weight) var(--social-body-size)/1.62 var(--social-serif);
+    letter-spacing: .005em; color: rgba(23,21,15,.88); text-wrap: pretty; overflow-wrap: anywhere;
+  }
+  .social-accent {
+    max-width: 830px; margin-top: 34px; color: var(--accent-dark);
+    font: var(--social-body-weight) var(--social-accent-size)/1.42 var(--social-serif);
+  }
+  .social-footer {
+    display: flex; align-items: center; justify-content: space-between; gap: 24px;
+    border-top: 1px solid rgba(23,21,15,.24); padding-top: 22px;
+    color: rgba(23,21,15,.72); font-size: 18px; flex-shrink: 0;
+  }
+  .social-footer strong { color: #17150F; font-weight: inherit; }
+  .social-card .page-indicator { display: none; }
+  .social-card--hook, .social-card--closing, .social-card--quote,
+  .social-card--thesis, .social-card--warning {
+    --social-heading-font: var(--social-display);
+    --social-heading-weight: var(--social-display-weight);
+  }
+  .social-card--hook .social-main h2, .social-card--closing .social-main h2 { font-size: var(--social-cover-size); line-height: 1.08; }
+  .social-card--business .social-main h2 { font-size: var(--social-business-size); }
+  .social-card--business .social-main { border-left: 8px solid var(--accent); padding-left: 50px; }
+  .social-card--quote .social-main h2 { font-size: var(--social-quote-size); }
+  .social-card--action .social-main h2 { color: var(--accent-dark); }
+  .social-card--warning .social-top-bar { height: 16px; }
+  .social-card--warning .social-main { border-top: 3px solid var(--accent); border-bottom: 3px solid var(--accent); margin: 48px 0; }
+
+  /* Background primitives copied inline (setContent is a standalone document).
+     Source: ~/aivan/content/social-posts/assets/_carousel-templates/carousel-kit.css
+     .paper-grain / .paper-real / .rule-solid / .rule-dotted / .rule-vertical
+     Synced 2026-09-07. Top bar uses a real element; watermark is .card-watermark,
+     leaving ::before / ::after exclusively for paper textures and notebook rules. */
+.paper-grain::before{
+  content:"";position:absolute;inset:0;pointer-events:none;z-index:0;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4'/></filter><rect width='200' height='200' filter='url(%23n)' opacity='.07'/></svg>");
+  mix-blend-mode:multiply;
+}
+.paper-grain.coarse::before{
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.62' numOctaves='3'/></filter><rect width='200' height='200' filter='url(%23n)' opacity='.11'/></svg>");
+}
+
+/* ---------- 四種底線系統 ---------- */
+/* A 實線橫線（筆記本） */
+.rule-solid::after{
+  content:"";position:absolute;inset:0;pointer-events:none;z-index:0;opacity:.85;
+  background-image:repeating-linear-gradient(to bottom,transparent 0 53px,var(--rule) 53px 54px);
+}
+/* B 點狀虛線橫線（純 CSS，不需手動放元素）
+   原理：radial-gradient 在每個 tile 頂端畫一個點，background-size 的 x 控制
+   點間距（形成虛線），y 控制行距。改行距只要改 y。 */
+.rule-dotted::after{
+  content:"";position:absolute;inset:0;pointer-events:none;z-index:0;
+  background-image:radial-gradient(circle at 1.5px 1.5px, rgba(30,34,40,.42) 1.5px, transparent 2px);
+  background-size:9px 63px;
+}
+.rule-dotted.tight::after{background-size:9px 52px;}
+.rule-dotted.loose::after{background-size:10px 78px;}
+/* C 直線格（參考圖 5） */
+.rule-vertical::after{
+  content:"";position:absolute;inset:0;pointer-events:none;z-index:0;opacity:.5;
+  background-image:repeating-linear-gradient(to right,transparent 0 119px,var(--rule) 119px 120px);
+}
+/* D 無線 */
+
+.paper-real{background:var(--card-bg, #eeebe4);}
+.paper-real::before{
+  /* 紙纖維。關鍵：feTurbulence 的 baseFrequency 兩軸差距拉大就會從雲霧狀變成絲狀。
+     這裡疊三層 — 水平絲、垂直絲（交錯成經緯）、細顆粒。 */
+  content:"";position:absolute;inset:0;pointer-events:none;z-index:1;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='420' height='420'><filter id='a'><feTurbulence type='fractalNoise' baseFrequency='0.005 0.82' numOctaves='5' seed='3'/><feColorMatrix type='saturate' values='0'/></filter><filter id='b'><feTurbulence type='fractalNoise' baseFrequency='0.82 0.005' numOctaves='5' seed='11'/><feColorMatrix type='saturate' values='0'/></filter><filter id='c'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4' seed='19'/><feColorMatrix type='saturate' values='0'/></filter><rect width='420' height='420' filter='url(%23a)' opacity='.17'/><rect width='420' height='420' filter='url(%23b)' opacity='.13'/><rect width='420' height='420' filter='url(%23c)' opacity='.08'/></svg>");
+  mix-blend-mode:multiply;
+}
+.paper-real::after{  /* 底色不勻 + 邊緣暗角 */
+  content:"";position:absolute;inset:0;pointer-events:none;z-index:1;
+  background:
+    radial-gradient(ellipse 70% 50% at 22% 18%, rgba(255,255,255,.5), transparent 60%),
+    radial-gradient(ellipse 60% 44% at 82% 76%, rgba(190,182,168,.28), transparent 62%),
+    radial-gradient(ellipse 120% 100% at 50% 50%, transparent 52%, rgba(120,112,98,.16));
+}
+
+
+  .bg-notebook-warm {
+    background: radial-gradient(circle at 18% 12%, rgba(23,21,15,.045) 0 1px, transparent 1.4px) 0 0 / 22px 22px, var(--card-bg);
+  }
+  /* Keep ruled paper subtle enough for long paragraphs and older readers. */
+  .social-card.rule-dotted::after { opacity: .22; }
+  .social-card.rule-vertical::after { opacity: .28; }
+  .social-card.bg-ink-dark { color: #FFF9F1; }
+  .bg-ink-dark .social-eyebrow, .bg-ink-dark .social-page, .bg-ink-dark .social-main p,
+  .bg-ink-dark .social-main h2, .bg-ink-dark .social-accent, .bg-ink-dark .social-footer,
+  .bg-ink-dark .social-footer strong { color: #FFF9F1; }
+  .bg-ink-dark .social-rule { background: #FFF9F1; }
+  .bg-ink-dark .social-footer { border-color: rgba(255,249,241,.42); }
+  .bg-ink-dark .social-main { border-color: rgba(255,249,241,.6); }
+
 </style>
 </head>
 <body>
 
-<!-- 卡片 layout 是動態的: render-card.ts 的 pickLayout(genre, includeRecall) 決定哪幾張出現。
-     每張卡用 data-slide-id 語意命名,Playwright 依 layout 順序選取截圖。
-     page-indicator 由 render-card.ts 在 Playwright evaluate 動態注入 (依實際 layout 算 active 位置)。 -->
+<!-- 固定 20 頁社群學習卡，由摘要 social_cards 或舊資料的可靠 fallback 產生。 -->
+{{social_cards_html}}
+
+<!-- 以下保留舊版卡片供歷史資料／編輯器相容；新版 CSS 不顯示。 -->
 
 <!-- 封面 -->
 <div class="card card-1" data-slide-id="cover">
@@ -927,31 +1064,8 @@
   <div class="page-indicator"></div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
-<script>
-  mermaid.initialize({
-    startOnLoad: true,
-    securityLevel: 'loose',
-    theme: 'base',
-    themeVariables: {
-      fontFamily: "'Noto Sans TC', sans-serif",
-      fontSize: '22px',
-      primaryColor: '{{accent_light_hex}}',
-      primaryTextColor: '#1A1A1A',
-      primaryBorderColor: '{{accent_hex}}',
-      lineColor: '{{accent_hex}}',
-      tertiaryColor: '#FFFFFF',
-      mainBkg: '{{accent_light_hex}}',
-      nodeBorder: '{{accent_hex}}',
-      clusterBkg: '#FFFFFF',
-      clusterBorder: '{{accent_hex}}'
-    },
-    mindmap: {
-      padding: 20,
-      maxNodeWidth: 360
-    }
-  });
-</script>
+<!-- The legacy hidden mindmap is retained as source only; the 20-page renderer
+     has no Mermaid or font CDN dependency. -->
 
 </body>
 </html>

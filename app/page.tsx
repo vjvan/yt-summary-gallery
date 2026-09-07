@@ -57,8 +57,8 @@ export default function Home() {
             className="bg-orange-50 border-2 border-orange-200 rounded-xl p-4 hover:border-orange-400 transition-colors"
           >
             <div className="text-xs font-bold text-orange-600 mb-1 tracking-wider">圖卡萃取</div>
-            <div className="text-sm font-bold text-gray-800 mb-1">影片 → 9 種學習卡</div>
-            <div className="text-xs text-gray-500 leading-snug">獲取 / 實作 / 記憶 三層覆蓋</div>
+            <div className="text-sm font-bold text-gray-800 mb-1">影片 → 20 頁學習卡</div>
+            <div className="text-xs text-gray-500 leading-snug">核心 / 商業 / 方法 / 反思完整編排</div>
           </Link>
           <Link
             href="/remix"

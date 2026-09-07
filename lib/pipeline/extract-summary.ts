@@ -1,5 +1,5 @@
 /**
- * 從影片逐字稿萃取結構化摘要 (給 carousel 9 種卡片用)。
+ * 從影片逐字稿萃取結構化摘要 (給 20 頁社群學習卡用)。
  *
  * v2 設計原則: 卡片要對應「使用者完成的事」,所以 summary 結構也要分三層:
  *  - 獲取層 (encoding): tldr_paragraph / key_points / highlights
@@ -20,8 +20,9 @@
 
 import fs from "fs";
 import path from "path";
+import { processingMode } from "../watch/provider";
 
-export const PROMPT_VERSION = "v2.0";
+export const PROMPT_VERSION = "v3.0-social-20";
 
 /**
  * 從外部檔案載入 prompt,失敗 fallback 到 demo 版。
@@ -58,10 +59,11 @@ const SYSTEM_PROMPT_DEMO = `你是一個影片內容摘要工具。讀逐字稿�
   "recall_questions": ["問句"],
   "tags": ["標籤"],
   "highlights": [{"timestamp":125,"label":"標題","description":"說明"}],
+  "social_cards": [{"role":"insight","eyebrow":"重點","title":"單頁標題","body":"單頁內文","accent":"關鍵短句"}],
   "video_genre": "tutorial | opinion | interview | news | review | other"
 }
 
-規則:繁體中文,不用 emoji,key_points 3-5 個,action_items / pitfalls 各 1-3 個,recall_questions 2-3 個,highlights 5-8 個按時間順序。`;
+規則:繁體中文,不用 emoji,key_points 3-5 個,action_items / pitfalls 各 1-3 個,recall_questions 2-3 個,highlights 5-8 個按時間順序。social_cards 必須剛好 20 頁：第 1 頁是 hook、第 20 頁是 closing；中間依來源安排核心主張、機制、證據、商業結構／商業模式（只有來源真的談到時）、工作流程、實作、風險與反思。每頁只講一件事，不重複、不捏造。`;
 
 const SYSTEM_PROMPT = loadPromptOrFallback(
   "OPENAI_EXTRACT_PROMPT_PATH",
@@ -86,6 +88,31 @@ export interface ActionItem {
   time_estimate: string;
 }
 
+export const SOCIAL_CARD_COUNT = 20;
+
+export type SocialCardRole =
+  | "hook"
+  | "context"
+  | "thesis"
+  | "insight"
+  | "business"
+  | "workflow"
+  | "evidence"
+  | "action"
+  | "warning"
+  | "quote"
+  | "reflection"
+  | "recap"
+  | "closing";
+
+export interface SocialCard {
+  role: SocialCardRole;
+  eyebrow: string;
+  title: string;
+  body: string;
+  accent: string;
+}
+
 export type VideoGenre =
   | "tutorial"
   | "opinion"
@@ -105,6 +132,7 @@ export interface Summary {
   recall_questions: string[];
   tags: string[];
   highlights: Highlight[];
+  social_cards: SocialCard[];
   video_genre: VideoGenre;
   prompt_version?: string;
 }
@@ -125,9 +153,32 @@ export function ensureSummaryShape(raw: Partial<Summary>): Summary {
     recall_questions: raw.recall_questions || [],
     tags: raw.tags || [],
     highlights: raw.highlights || [],
+    social_cards: normalizeSocialCards(raw.social_cards),
     video_genre: (raw.video_genre as VideoGenre) || "other",
     prompt_version: raw.prompt_version, // 不 default 成 PROMPT_VERSION,保留 null 以便辨識「未經 augment 的舊資料」
   };
+}
+
+function normalizeSocialCards(raw: unknown): SocialCard[] {
+  if (!Array.isArray(raw)) return [];
+  const allowed = new Set<SocialCardRole>([
+    "hook", "context", "thesis", "insight", "business", "workflow", "evidence",
+    "action", "warning", "quote", "reflection", "recap", "closing",
+  ]);
+  return raw.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const value = item as Record<string, unknown>;
+    const role = String(value.role || "") as SocialCardRole;
+    if (!allowed.has(role)) return [];
+    const card = {
+      role,
+      eyebrow: String(value.eyebrow || "").trim(),
+      title: String(value.title || "").trim(),
+      body: String(value.body || "").trim(),
+      accent: String(value.accent || "").trim(),
+    };
+    return card.title && card.body ? [card] : [];
+  });
 }
 
 /**
@@ -157,6 +208,10 @@ export async function extractSummary(
   videoTitle: string,
   channel: string
 ): Promise<Summary> {
+  if (processingMode() === 'local') {
+    const { extractLocalSummary } = await import('./local-summary');
+    return extractLocalSummary(transcriptWithTimestamps, videoTitle, channel);
+  }
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY not set");
 
@@ -181,7 +236,7 @@ export async function extractSummary(
       ],
       response_format: { type: "json_object" },
       temperature: 0.3,
-      max_tokens: 4000,
+      max_tokens: 6000,
     }),
   });
 
@@ -213,6 +268,7 @@ export async function extractSummaryVerified(
   durationSec: number
 ): Promise<Summary> {
   const summary = await extractSummary(transcriptWithTimestamps, videoTitle, channel);
+  if (processingMode() === "local") return summary;
   if (durationSec > 0 && highlightsLookBroken(summary.highlights, durationSec)) {
     try {
       const fixed = await regenerateHighlights(
@@ -227,14 +283,14 @@ export async function extractSummaryVerified(
 }
 
 /**
- * Lazy upgrade: 給只有舊欄位的 summary 補新 4 欄位 (tldr_paragraph / pitfalls / recall_questions / video_genre)。
+ * Lazy upgrade: 給舊 summary 補新版欄位與 20 頁社群學習卡。
  *
  * 不重新計算既有的 title_display / key_points / highlights 等,只請 GPT 回傳缺的部分,
  * 用較小的 max_tokens (省 cost) + 較短的 prompt (省 input cost)。
  *
  * 跟 SYSTEM_PROMPT 一樣走 prompt 外部檔載入 + demo fallback。
  */
-const AUGMENT_PROMPT_DEMO = `你是一個影片內容摘要工具。已有讀者的影片摘要,請補充缺的欄位 (tldr_paragraph / pitfalls / recall_questions / video_genre),並把舊 action_items 升級成 v2 結構。
+const AUGMENT_PROMPT_DEMO = `你是一個影片內容摘要工具。已有讀者的影片摘要,請補充缺的欄位 (tldr_paragraph / pitfalls / recall_questions / video_genre / social_cards),並把舊 action_items 升級成 v2 結構。
 
 輸出 JSON:
 {
@@ -242,10 +298,11 @@ const AUGMENT_PROMPT_DEMO = `你是一個影片內容摘要工具。已有讀者
   "pitfalls": [{"warn":"...","why":"..."}],
   "recall_questions": ["..."],
   "video_genre": "tutorial | opinion | interview | news | review | other",
-  "action_items_v2": [{"action":"...","expected_outcome":"...","time_estimate":"..."}]
+  "action_items_v2": [{"action":"...","expected_outcome":"...","time_estimate":"..."}],
+  "social_cards": [{"role":"hook","eyebrow":"分類","title":"單頁標題","body":"單頁內文","accent":"關鍵短句"}]
 }
 
-規則: 繁體中文,不用 emoji。`;
+規則: 繁體中文,不用 emoji。social_cards 剛好20頁，第1頁role=hook、第20頁role=closing，每頁只講一件事、不重複、不捏造；只有來源支持時才分析商業結構或商業模式。`;
 
 const AUGMENT_PROMPT = loadPromptOrFallback(
   "OPENAI_AUGMENT_PROMPT_PATH",
@@ -259,6 +316,14 @@ export async function augmentSummary(
   videoTitle: string,
   channel: string
 ): Promise<Summary> {
+  if (processingMode() === 'local') {
+    const { extractLocalSummary } = await import('./local-summary');
+    const fresh = await extractLocalSummary(transcriptWithTimestamps, videoTitle, channel);
+    return { ...oldSummary, tldr_paragraph: fresh.tldr_paragraph, pitfalls: fresh.pitfalls,
+      recall_questions: fresh.recall_questions, video_genre: fresh.video_genre, action_items: fresh.action_items,
+      social_cards: fresh.social_cards,
+      prompt_version: fresh.prompt_version };
+  }
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY not set");
 
@@ -274,6 +339,7 @@ export async function augmentSummary(
       key_points: oldSummary.key_points,
       key_quote: oldSummary.key_quote,
       action_items_old: oldSummary.action_items,
+      social_cards_old: oldSummary.social_cards,
       tags: oldSummary.tags,
     },
     null,
@@ -296,7 +362,7 @@ export async function augmentSummary(
       ],
       response_format: { type: "json_object" },
       temperature: 0.3,
-      max_tokens: 2000,
+      max_tokens: 6000,
     }),
   });
 
@@ -315,6 +381,7 @@ export async function augmentSummary(
     recall_questions?: string[];
     video_genre?: VideoGenre;
     action_items_v2?: ActionItem[];
+    social_cards?: SocialCard[];
   };
 
   return ensureSummaryShape({
@@ -326,6 +393,9 @@ export async function augmentSummary(
     action_items: augmented.action_items_v2?.length
       ? augmented.action_items_v2
       : normalizeActionItems(oldSummary.action_items),
+    social_cards: augmented.social_cards?.length === SOCIAL_CARD_COUNT
+      ? augmented.social_cards
+      : oldSummary.social_cards,
     prompt_version: PROMPT_VERSION,
   });
 }
@@ -369,6 +439,11 @@ export async function regenerateHighlights(
   channel: string,
   durationSec: number
 ): Promise<Highlight[]> {
+  if (processingMode() === 'local') {
+    const { extractLocalSummary } = await import('./local-summary');
+    const summary = await extractLocalSummary(transcriptWithTimestamps, videoTitle, channel);
+    return summary.highlights.filter(item => durationSec <= 0 || item.timestamp <= durationSec + 5);
+  }
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY not set");
 

@@ -12,27 +12,43 @@ import { runVideoPipeline } from "@/lib/pipeline/run-video-pipeline";
 import type { TranscriptResult } from "@/lib/pipeline/fetch-transcript";
 import path from "path";
 import crypto from "crypto";
+import { processingMode } from "@/lib/watch/provider";
+import { canonicalYouTubeUrl } from "@/lib/watch/source";
+import { assertPairingRequest } from "@/lib/watch/security";
+import { ensureLibrarySubtitleColumns, libraryJobActive, libraryCardsReady, startLocalYoutubeLibrary } from "@/lib/pipeline/local-youtube-library";
 
 export async function POST(req: NextRequest) {
   try {
     const { url } = await req.json();
-    if (!url) {
+    if (typeof url !== "string" || !url.trim() || url.length > 2048) {
       return NextResponse.json({ error: "URL is required" }, { status: 400 });
     }
 
     const source = detectSource(url);
     let contentId: string;
     try {
-      contentId = extractId(url, source);
+      contentId = source === "youtube" ? canonicalYouTubeUrl(url).videoId : extractId(url, source);
     } catch {
       return NextResponse.json({ error: "無法解析此連結" }, { status: 400 });
     }
 
     const db = getDb();
+    if (source === "youtube") ensureLibrarySubtitleColumns();
 
     const existing = db
       .prepare("SELECT * FROM summaries WHERE video_id = ?")
       .get(contentId) as Record<string, unknown> | undefined;
+
+    if (source === "youtube" && (processingMode() === "local" || existing?.subtitle_status)) {
+      assertPairingRequest(req);
+      if (processingMode() !== "local") return NextResponse.json({ error: "此影片是本機摘要/字幕工作；請切回本機模式後續作，不會自動改送雲端。" }, { status: 409 });
+      const id = (existing?.id as string) || crypto.randomUUID();
+      if (existing?.status === "done" && existing.subtitle_status === "complete" && libraryCardsReady(existing.card_paths)) return NextResponse.json({ id, status: "done", subtitle_status: "complete" });
+      if (!existing) db.prepare("INSERT INTO summaries (id, video_id, url, source, status) VALUES (?, ?, ?, 'youtube', 'processing')").run(id, contentId, canonicalYouTubeUrl(url).url);
+      else if (!libraryJobActive(id)) db.prepare("UPDATE summaries SET status=?, error=NULL WHERE id=?").run(existing.summary ? 'done' : 'processing', id);
+      void startLocalYoutubeLibrary(id, canonicalYouTubeUrl(url).url);
+      return NextResponse.json({ id, status: existing?.summary ? "done" : "processing", subtitle_status: existing?.subtitle_status === "complete" ? "complete" : "processing", card_status: libraryCardsReady(existing?.card_paths) ? "complete" : "processing", processingMode: "local" }, { status: 202 });
+    }
 
     if (existing && existing.status === "done") {
       return NextResponse.json({ id: existing.id, status: "done" });
@@ -51,22 +67,22 @@ export async function POST(req: NextRequest) {
     }
 
     if (source === "video-url") {
-      runVideoUrlPipeline(id, url, contentId).catch((err) => {
-        console.error("Video URL pipeline error:", err);
+      runVideoUrlPipeline(id, url, contentId).catch(() => {
+        console.error("Video URL pipeline failed; retry through the library UI.");
         getDb().prepare("UPDATE summaries SET status = 'error', error = ? WHERE id = ?")
-          .run(err.message?.slice(0, 500) || "Unknown error", id);
+          .run("處理尚未完成。請確認字幕來源/本機服務或目前設定的模型可用後重試；成功的中間結果會保留。", id);
       });
     } else {
-      runYoutubeOrPodcastPipeline(id, url, contentId, source).catch((err) => {
-        console.error("Pipeline error:", err);
+      runYoutubeOrPodcastPipeline(id, url, contentId, source).catch(() => {
+        console.error("Pipeline failed; retry through the library UI.");
         getDb().prepare("UPDATE summaries SET status = 'error', error = ? WHERE id = ?")
-          .run(err.message?.slice(0, 500) || "Unknown error", id);
+          .run("處理尚未完成。請確認字幕來源/本機服務或目前設定的模型可用後重試；成功的中間結果會保留。", id);
       });
     }
 
     return NextResponse.json({ id, status: "processing" });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+  } catch {
+    const message = "處理尚未完成。請確認字幕來源/本機服務或目前設定的模型可用後重試；成功的中間結果會保留。";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

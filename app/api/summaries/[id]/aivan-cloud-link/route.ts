@@ -40,7 +40,7 @@ export async function GET(
 
   try {
     const localProjectUrl = new URL(`/api/summaries/${id}/aivan-project`, request.nextUrl.origin);
-    for (const key of ["theme", "recall"]) {
+    for (const key of ["palette", "font", "bg", "theme", "recall"]) {
       const value = request.nextUrl.searchParams.get(key);
       if (value) localProjectUrl.searchParams.set(key, value);
     }

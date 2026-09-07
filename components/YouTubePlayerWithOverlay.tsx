@@ -175,7 +175,9 @@ export default function YouTubePlayerWithOverlay({
   // - rel=0: 不顯示相關影片
   // - enablejsapi=1: 開啟 postMessage API
   const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const src = `https://www.youtube.com/embed/${videoId}?enablejsapi=1&cc_load_policy=0&iv_load_policy=3&modestbranding=1&rel=0&origin=${origin}`;
+  const start = typeof initialSeekSec === "number" && Number.isFinite(initialSeekSec) && initialSeekSec > 0 ? Math.floor(initialSeekSec) : 0;
+  // Start at the evidence cue even when the browser blocks autoplay or postMessage is not ready yet.
+  const src = `https://www.youtube.com/embed/${videoId}?enablejsapi=1&cc_load_policy=0&iv_load_policy=3&modestbranding=1&rel=0&origin=${origin}${start ? `&start=${start}` : ""}`;
 
   const subtitleOverlay =
     overlayVisible && ((showOriginal && activeOriginal) || (showTranslated && activeTranslated)) ? (

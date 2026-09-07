@@ -57,7 +57,16 @@ export async function DELETE(
     if (url && url.startsWith("/")) rmrf(path.join(publicDir, url.replace(/^\//, "")));
   }
 
-  db.prepare("DELETE FROM aivan_project_versions WHERE summary_id = ?").run(row.id);
-  db.prepare("DELETE FROM summaries WHERE id = ?").run(row.id);
+  db.transaction(() => {
+    // Private learning evidence, model checkpoints and practice notes have the
+    // same lifecycle as their video; deletion must not leave private remnants.
+    for (const table of ["learning_point_reviews", "learning_checkpoints", "learning_analyses"] as const) {
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table)) {
+        db.prepare(`DELETE FROM ${table} WHERE summary_id = ?`).run(row.id);
+      }
+    }
+    db.prepare("DELETE FROM aivan_project_versions WHERE summary_id = ?").run(row.id);
+    db.prepare("DELETE FROM summaries WHERE id = ?").run(row.id);
+  })();
   return NextResponse.json({ ok: true });
 }

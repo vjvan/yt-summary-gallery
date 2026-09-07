@@ -1,9 +1,9 @@
 import type { Glossary } from '../glossary-defaults';
-import { WatchError } from './errors';
+import { WatchError, LOCAL_QUALITY_REASONS, safeLocalQualityReason, type LocalQualityReason } from './errors';
 import type { TranslatedCue, WatchCue, WatchSource, WatchProviderInfo } from './types';
 import { watchProviderInfo } from './provider';
-import { requestLocalCue, repeatedNameSourceFragments, requestLocalRepeatedNameRepair, untranslatedLocalWords, missingSourceNumbers } from './local-cue-translator';
-import { prepareProtectedCue, requiredProtectedTerms, missingProtectedTerms, protectedNamesOnlyText } from './protected-terms';
+import { requestLocalCue, localShortCueContext, repeatedNameSourceFragments, requestLocalRepeatedNameRepair, untranslatedLocalWords, missingSourceNumbers, sourceNumbers } from './local-cue-translator';
+import { prepareProtectedCue, requiredProtectedTerms, missingProtectedTerms, protectedNamesOnlyText, canonicalizeProtectedPlatformTranslation } from './protected-terms';
 import { normalizeTaiwanSubtitle } from './taiwan-terminology';
 import { softSpeakerNames, withSpeakerNames, withoutSpeakerNames } from './speaker-names';
 // @ts-expect-error opencc-js does not ship TypeScript declarations.
@@ -17,7 +17,7 @@ export const TRANSLATION_VERSION = 'watch-zh-TW-v14-taiwan-register-speaker-name
 const MAX_TARGETS = 8;
 
 /** Only server-observed numeric timing and fixed copy may enter a public quality error. */
-function localQualityFailure(cue: WatchCue | undefined, reason: string): WatchError {
+function localQualityFailure(cue: WatchCue | undefined, reason: LocalQualityReason): WatchError {
   const clock = (seconds: number, end = false) => {
     const safe = Number.isFinite(seconds) && seconds >= 0 ? seconds : 0;
     const total = end ? Math.ceil(safe) : Math.floor(safe);
@@ -25,7 +25,7 @@ function localQualityFailure(cue: WatchCue | undefined, reason: string): WatchEr
     return `${hours ? `${hours}:` : ''}${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
   };
   const range = cue ? `（${clock(cue.start)}–${clock(cue.end, true)}）` : '';
-  return new WatchError('LOCAL_TRANSLATION_QUALITY', `本機翻譯${range}${reason}；這一批未寫入成功快取，可稍後重試。`, 502);
+  return new WatchError('LOCAL_TRANSLATION_QUALITY', `本機翻譯${range}${LOCAL_QUALITY_REASONS[reason]}；這一批未寫入成功快取，可稍後重試。`, 502, reason);
 }
 
 interface TranslateWatchWindowInput {
@@ -88,7 +88,7 @@ export function validateWatchTranslation(content: string, targets: WatchCue[], g
     const text = options.localTaiwan ? normalizeTaiwanSubtitle(item.text.trim(), glossary, toTaiwanTraditional) : toTaiwanTraditional(item.text.trim());
     const original = targets[index].text.trim();
     const languageNeutral = keepTerms.has(original.toLowerCase()) || /^[\d\s\p{P}\p{S}]+$/u.test(original) || /^[A-Z][A-Z\d_-]{1,19}$/.test(original);
-    if (!languageNeutral && !/[\u3400-\u9fff]/.test(text)) throw new WatchError('MODEL_FAILED', '翻譯未產生繁中字幕；不會把原文 fallback 當作成功結果。');
+    if (!languageNeutral && !/[\u3400-\u9fff]/.test(text)) throw new WatchError('MODEL_FAILED', '翻譯未產生繁中字幕；不會把原文 fallback 當作成功結果。', 502, 'NOT_CHINESE');
     return { ...targets[index], text, originalText: targets[index].text };
   });
 }
@@ -136,7 +136,20 @@ export async function translateWatchWindow(input: TranslateWatchWindowInput): Pr
           translated.push({ ...cue, originalText: cue.text, text: namesOnly });
           continue;
         }
-        let text = await requestLocalCue({ cue: prepared.cue, glossary: prepared.glossary, model: provider.translationModel, signal: batchSignal });
+        let text = '', recoverIncomplete = false, contextualRepair = false;
+        try {
+          text = await requestLocalCue({ cue: prepared.cue, glossary: prepared.glossary, model: provider.translationModel, signal: batchSignal });
+        } catch (error) {
+          if (!(error instanceof WatchError) || error.code !== 'LOCAL_TRANSLATION_INCOMPLETE') throw error;
+          // Discard partial generation and spend the SAME single repair below;
+          // a repair that fails validation never receives a third attempt.
+          recoverIncomplete = true;
+        }
+        // Only rewrite an already-mentioned known platform alias; never append
+        // missing names. Keep the original source (not normalized ASR aliases)
+        // as evidence, and exclude soft speaker-name guesses from eligibility.
+        const spellingGlossary = withoutSpeakerNames(softNames, prepared.glossary);
+        text = canonicalizeProtectedPlatformTranslation(text, input.source, cue, spellingGlossary);
         const original = cue.text.trim();
         const languageNeutral = prepared.glossary.no_translate_terms.some(term => term.toLowerCase() === prepared.cue.text.trim().toLowerCase()) || /^[\d\s\p{P}\p{S}]+$/u.test(original) || /^[A-Z][A-Z\d_-]{1,19}$/.test(original);
         const untranslated = languageNeutral ? [] : untranslatedLocalWords(text, prepared.cue, prepared.glossary);
@@ -146,19 +159,24 @@ export async function translateWatchWindow(input: TranslateWatchWindowInput): Pr
         // most 16 sequential calls, all under the same 90-second batch deadline.
         // A lost source number shares that single repair; it is not a hard
         // rejection afterwards, because an occasional \u516b\u5341 must not stall subtitles.
-        if ((!languageNeutral && (!/[\u3400-\u9fff]/.test(text) || untranslated.length > 0)) || missing.length > 0 || missingNumbers.length > 0) {
+        if (recoverIncomplete || (!languageNeutral && (!/[\u3400-\u9fff]/.test(text) || untranslated.length > 0)) || missing.length > 0 || missingNumbers.length > 0) {
           batchSignal.throwIfAborted();
           // Structured fragment repair is reserved for the user's repeated names; it splits only at those, so a speaker label cannot make it fail.
           const hardGlossary = withoutSpeakerNames(softNames, prepared.glossary);
-          const repeated = hardTerms(missing).some(term => protectedTerms.filter(name => name === term).length > 1)
+          const repeated = !recoverIncomplete && hardTerms(missing).some(term => protectedTerms.filter(name => name === term).length > 1)
             ? repeatedNameSourceFragments(prepared.cue, hardGlossary) : null;
+          const context = !repeated && (recoverIncomplete || (!languageNeutral && (!/[\u3400-\u9fff]/.test(text) || untranslated.length > 0)))
+            ? localShortCueContext(input.source, cue) : undefined;
+          contextualRepair = Boolean(context);
           text = repeated
             ? await requestLocalRepeatedNameRepair({ cue: prepared.cue, glossary: hardGlossary, model: provider.translationModel, signal: batchSignal, fragments: repeated })
-            : await requestLocalCue({ cue: prepared.cue, glossary: prepared.glossary, model: provider.translationModel, signal: batchSignal, repair: untranslated.length ? untranslated : !/[\u3400-\u9fff]/.test(text), missingTerms: missing, missingNumbers });
+            : await requestLocalCue({ cue: prepared.cue, glossary: prepared.glossary, model: provider.translationModel, signal: batchSignal, repair: recoverIncomplete ? false : untranslated.length ? untranslated : !/[\u3400-\u9fff]/.test(text), missingTerms: missing, missingNumbers, recoverIncomplete, context });
         }
         batchSignal.throwIfAborted();
-        if (!languageNeutral && untranslatedLocalWords(text, prepared.cue, prepared.glossary).length) throw localQualityFailure(cue, '仍含未翻譯的一般英文');
-        if (missingProtectedTerms(text, hardTerms(protectedTerms)).length) throw localQualityFailure(cue, '未保留指定專有名詞或其出現次數');
+        text = canonicalizeProtectedPlatformTranslation(text, input.source, cue, spellingGlossary);
+        if (!languageNeutral && untranslatedLocalWords(text, prepared.cue, prepared.glossary, { inspectQuotedText: recoverIncomplete || contextualRepair, inferCapitalizedNames: !contextualRepair }).length) throw localQualityFailure(cue, 'UNTRANSLATED_ENGLISH');
+        if (missingProtectedTerms(text, hardTerms(protectedTerms)).length) throw localQualityFailure(cue, 'PROTECTED_TERMS');
+        if ((recoverIncomplete || contextualRepair) && JSON.stringify(sourceNumbers(text)) !== JSON.stringify(sourceNumbers(prepared.cue.text))) throw localQualityFailure(cue, 'SOURCE_NUMBERS');
         const validationGlossary = languageNeutral ? { ...prepared.glossary, no_translate_terms: [...prepared.glossary.no_translate_terms, original] } : prepared.glossary;
         translated.push(...validateWatchTranslation(JSON.stringify({ cues: [{ id: cue.id, text }] }), [cue], validationGlossary, { localTaiwan: true }));
       }
@@ -168,8 +186,9 @@ export async function translateWatchWindow(input: TranslateWatchWindowInput): Pr
       if (batchSignal.aborted) throw new WatchError('LOCAL_MODEL_TIMEOUT', '本機逐句翻譯超過整批 90 秒上限；未將部分結果當作成功快取。', 504);
       // Keep transport, provider, configuration and cloud errors distinct. Only
       // validated local content failures may be isolated as a failed subtitle batch.
-      if (error instanceof WatchError && error.code === 'LOCAL_TRANSLATION_TRUNCATED') throw localQualityFailure(activeCue, '輸出達到安全長度上限，尚未完整完成');
-      if (error instanceof WatchError && error.code === 'MODEL_FAILED') throw localQualityFailure(activeCue, '譯文格式或語言未通過檢查');
+      if (error instanceof WatchError && error.code === 'LOCAL_TRANSLATION_TRUNCATED') throw localQualityFailure(activeCue, 'OUTPUT_LIMIT');
+      if (error instanceof WatchError && error.code === 'LOCAL_TRANSLATION_INCOMPLETE') throw localQualityFailure(activeCue, 'INCOMPLETE_GENERATION');
+      if (error instanceof WatchError && error.code === 'MODEL_FAILED') throw localQualityFailure(activeCue, error.qualityReason ? safeLocalQualityReason(error.qualityReason) : 'INVALID_FORMAT');
       throw error;
     }
   }

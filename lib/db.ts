@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
+import { migrateLearningStorage } from "./learning/store";
 
 const DB_PATH = path.join(process.cwd(), "data", "summaries.db");
 
@@ -59,6 +60,12 @@ export function getDb() {
     // Burn 流程獨立於主 pipeline,不阻塞 status=done
     addCol("burn_status", "TEXT");
     addCol("burn_error", "TEXT");
+    // Carousel 三軸樣式。NULL 舊資料由 resolveCardStyle 使用預設，不改寫歷史內容。
+    addCol("card_style", "TEXT");
+    addCol("card_render_token", "TEXT");
+
+    // Private learning data is isolated from summaries JSON and existing cloud sync.
+    migrateLearningStorage(db);
 
     // Remix projects
     db.exec(`
@@ -189,6 +196,8 @@ export interface SummaryRow {
   transcript_source: string;
   summary: string;
   card_paths: string;
+  card_style: string | null;
+  card_render_token: string | null;
   slide_count: number;
   status: string;
   error: string | null;

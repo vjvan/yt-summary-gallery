@@ -18,6 +18,9 @@ const portArg = process.argv.indexOf('--port');
 const port = portArg < 0 ? 3000 : Number(process.argv[portArg + 1]);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw Error('連接埠必須介於 1024–65535。');
 const checkOnly = process.argv.includes('--check');
+const legacyArg = process.argv.indexOf('--legacy-port');
+const legacyPort = legacyArg < 0 ? (port === 3000 ? 3111 : 0) : Number(process.argv[legacyArg + 1]);
+if (legacyPort !== 0 && (!Number.isInteger(legacyPort) || legacyPort < 1024 || legacyPort > 65535 || legacyPort === port)) throw Error('舊入口須為不同的本機連接埠；可用 --legacy-port 0 停用。');
 const children = new Set();
 let stopping = false;
 function stop(code = 0) {
@@ -72,6 +75,13 @@ try {
   if (checkOnly) console.log('模型檔案與 Ollama 已通過檢查；未執行推論。');
   else {
     console.log(`觀看頁：http://127.0.0.1:${port}/watch（請保持這個終端機開啟）`);
+    if (legacyPort) {
+      // Navigation alias only. An occupied port is never killed or taken over.
+      const alias = spawn(process.execPath, [path.join(root, 'scripts/redirect-legacy-watch.mjs'), String(legacyPort), String(port)], {cwd: root, stdio: 'inherit'});
+      children.add(alias);
+      alias.once('exit', () => children.delete(alias));
+      alias.once('error', () => { children.delete(alias); console.warn('舊入口導向未啟動，請直接使用上方正式網址。'); });
+    }
     const child = own(spawn(process.execPath, [path.join(root, 'node_modules/next/dist/bin/next'), 'start', '-H', '127.0.0.1', '--port', String(port)], {
       cwd: root, stdio: 'inherit', env: { ...process.env, WATCH_PROCESSING_MODE: 'local', WATCH_LOCAL_MODEL: model,
         WATCH_LOCAL_WHISPER_MODEL: whisperModel, WATCH_LOCAL_WHISPER_BIN: whisperBin },

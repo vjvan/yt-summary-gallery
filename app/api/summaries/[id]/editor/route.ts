@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, SummaryRow } from "@/lib/db";
 import { ensureSummaryShape, type Summary } from "@/lib/pipeline/extract-summary";
-import { buildCardHtml, CARD_THEMES } from "@/lib/pipeline/render-card";
+import { buildCardHtml } from "@/lib/pipeline/render-card";
+import { CARD_THEMES, FONT_PRESETS, BACKGROUNDS, buildStyleCss, resolveCardStyle, cardStyleOverrides, CardStyleError, type CardStyle } from "@/lib/card-style";
 import { buildCaption } from "@/lib/pipeline/build-caption";
 import type { VideoMetadata } from "@/lib/pipeline/fetch-transcript";
 
@@ -12,13 +13,13 @@ import type { VideoMetadata } from "@/lib/pipeline/fetch-transcript";
  *
  * 把這支影片的卡片組(card.html 同款設計)包成一個「可直接編輯」的單頁 HTML:
  * - 所有文字 contenteditable,點了就改(改錯字 / 調語氣不用重跑 GPT)
- * - 主題即時切換(5 套 CARD_THEMES)
+ * - 三軸樣式即時預覽（DB/query 是載入預設）
  * - 每張卡單獨匯出 PNG(html-to-image,1080x1350 原尺寸)
  * - 一鍵複製貼文文案
  * - 「下載 HTML」把目前編輯狀態存成獨立單檔,離線可繼續編輯
  * - 編輯自動存 localStorage(同 slide-studio 的 state 持久化理念)
  *
- * ?theme=xxx 換主題 / ?recall=1 加自我測驗卡 / ?download=1 直接下載檔案
+ * ?palette=&font=&bg= 覆寫 / ?theme= 相容別名 / ?preview=1 靜態單卡 / ?download=1 匯出
  */
 export async function GET(
   req: NextRequest,
@@ -47,17 +48,44 @@ export async function GET(
   };
 
   const sp = req.nextUrl.searchParams;
-  const themeOverride = sp.get("theme") || undefined;
-  const includeRecall = sp.get("recall") === "1";
+  let style: CardStyle;
+  try {
+    style = resolveCardStyle(row.card_style, cardStyleOverrides(sp));
+  } catch (error) {
+    if (error instanceof CardStyleError) return NextResponse.json({ error: error.message }, { status: 400 });
+    throw error;
+  }
+  const { html, layout } = buildCardHtml(summary, metadata, style, sp.get("recall") === "1");
 
-  const { html, theme, layout } = buildCardHtml(summary, metadata, themeOverride, includeRecall);
+  // A single, static same-origin card for the live style panel. The parent changes
+  // shared CSS variables/classes locally: no re-render API or CDN script needed.
+  if (sp.get("preview") === "1") {
+    const previewHtml = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+      .replace("</head>", `<style>html,body{margin:0!important;padding:0!important;width:1080px!important;height:1350px!important;overflow:hidden!important;display:block!important}.card{display:none!important}.card[data-slide-id="${layout[0]}"]{display:flex!important;margin:0!important}</style></head>`);
+    return new NextResponse(previewHtml, { headers: {
+      "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store",
+      "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; frame-ancestors 'self'",
+    } });
+  }
+
+  const styleVariants: Record<string, ReturnType<typeof buildStyleCss>> = {};
+  for (const palette of Object.keys(CARD_THEMES)) {
+    for (const fontPreset of Object.keys(FONT_PRESETS)) {
+      for (const background of Object.keys(BACKGROUNDS)) {
+        styleVariants[[palette, fontPreset, background].join("|")] = buildStyleCss({ palette, fontPreset, background });
+      }
+    }
+  }
 
   const config = {
     videoId: row.video_id,
     title: summary.title_display || row.title || "",
     layout,
-    activeThemeId: theme.id,
+    activeStyle: style,
     themes: CARD_THEMES,
+    fontPresets: FONT_PRESETS,
+    backgrounds: BACKGROUNDS,
+    styleVariants,
     watermark: process.env.CARD_WATERMARK || "vjvan.com · P2P AI Lab",
     caption: buildCaption(summary, row.title || ""),
   };
@@ -66,6 +94,7 @@ export async function GET(
 
   const headers: Record<string, string> = {
     "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
   };
   if (sp.get("download") === "1") {
     headers["Content-Disposition"] = `attachment; filename="cards-${row.video_id}.html"`;
@@ -77,8 +106,11 @@ interface EditorConfig {
   videoId: string;
   title: string;
   layout: string[];
-  activeThemeId: string;
+  activeStyle: CardStyle;
   themes: typeof CARD_THEMES;
+  fontPresets: typeof FONT_PRESETS;
+  backgrounds: typeof BACKGROUNDS;
+  styleVariants: Record<string, ReturnType<typeof buildStyleCss>>;
   watermark: string;
   caption: string;
 }
@@ -172,7 +204,7 @@ function buildEditorShell(config: EditorConfig): string {
 
   // === 4. 浮水印(Layer 8,同 render-card.ts)===
   var wmStyle = document.createElement("style");
-  wmStyle.textContent = ".card-watermark{position:absolute;bottom:14px;right:24px;font-family:'Inter','Noto Sans TC',sans-serif;font-size:13px;font-weight:600;color:rgba(0,0,0,0.32);letter-spacing:0.5px;z-index:5;pointer-events:none;}";
+  wmStyle.textContent = ".card-watermark{position:absolute;bottom:14px;right:24px;font-family:var(--social-mono);font-size:13px;font-weight:600;color:currentColor;opacity:.55;letter-spacing:0.5px;z-index:5;pointer-events:none;}";
   document.head.appendChild(wmStyle);
   $all(".card").forEach(function (card) {
     if (card.querySelector(".card-watermark")) return;
@@ -250,36 +282,53 @@ function buildEditorShell(config: EditorConfig): string {
   var bar = document.createElement("div");
   bar.className = "editor-toolbar";
   bar.innerHTML =
-    '<span class="et-title">' + CFG.title + '</span>' +
+    '<span class="et-title"></span>' +
     '<span class="et-hint">點卡片文字直接編輯,自動保存</span>' +
-    '<select id="et-theme"></select>' +
+    '<select id="et-theme" aria-label="配色"></select>' +
+    '<select id="et-font" aria-label="字型組"></select>' +
+    '<select id="et-bg" aria-label="背景"></select>' +
+    '<span class="et-hint">樣式僅預覽；正式套用請回影片頁</span>' +
     '<button id="et-all" class="et-primary">全部匯出 PNG</button>' +
     '<button id="et-caption">複製貼文文案</button>' +
     '<button id="et-html">下載可編輯 HTML</button>' +
     '<button id="et-reset">還原預設</button>';
   document.body.appendChild(bar);
 
+  $(".et-title", bar).textContent = CFG.title;
   var themeSelect = $("#et-theme");
-  Object.keys(CFG.themes).forEach(function (tid) {
-    var opt = document.createElement("option");
-    opt.value = tid;
-    opt.textContent = CFG.themes[tid].label;
-    if (tid === CFG.activeThemeId) opt.selected = true;
-    themeSelect.appendChild(opt);
+  var fontSelect = $("#et-font");
+  var bgSelect = $("#et-bg");
+  function setupSelect(select, entries, selected) {
+    Object.keys(entries).forEach(function (id) {
+      var opt = document.createElement("option");
+      opt.value = id;
+      opt.textContent = entries[id].label;
+      opt.selected = id === selected;
+      select.appendChild(opt);
+    });
+  }
+  setupSelect(themeSelect, CFG.themes, CFG.activeStyle.palette);
+  setupSelect(fontSelect, CFG.fontPresets, CFG.activeStyle.fontPreset);
+  setupSelect(bgSelect, CFG.backgrounds, CFG.activeStyle.background);
+  function applyStyle() {
+    var style = { palette: themeSelect.value, fontPreset: fontSelect.value, background: bgSelect.value };
+    var resolved = CFG.styleVariants[[style.palette, style.fontPreset, style.background].join("|")];
+    if (!resolved) return;
+    Object.keys(resolved.variables).forEach(function (key) {
+      document.documentElement.style.setProperty(key, resolved.variables[key]);
+    });
+    var backgroundClasses = Object.keys(CFG.backgrounds).map(function (id) { return CFG.backgrounds[id].className; });
+    $all(".social-card").forEach(function (card) {
+      backgroundClasses.forEach(function (name) { name.split(/\\s+/).filter(Boolean).forEach(function (c) { card.classList.remove(c); }); });
+      resolved.backgroundClass.split(/\\s+/).filter(Boolean).forEach(function (c) { card.classList.add(c); });
+    });
+    CFG.activeStyle = style;
+  }
+  [themeSelect, fontSelect, bgSelect].forEach(function (select) {
+    select.addEventListener("change", function () { applyStyle(); toast("樣式預覽已更新；尚未套用至影片庫"); });
   });
-  themeSelect.addEventListener("change", function () {
-    var t = CFG.themes[themeSelect.value];
-    if (!t) return;
-    var rs = document.documentElement.style;
-    rs.setProperty("--accent", t.accent);
-    rs.setProperty("--accent-light", t.accentLight);
-    rs.setProperty("--accent-dark", t.accentDark);
-    rs.setProperty("--card-bg", t.cardBg);
-    CFG.activeThemeId = t.id;
-    toast("已切換主題:" + t.label);
-  });
-  // 載入時套用一次(downloaded HTML 重開時還原上次選的主題)
-  themeSelect.dispatchEvent(new Event("change"));
+  // DB/query is authoritative. Never restore legacy localStorage palette/style.
+  applyStyle();
 
   $("#et-all").addEventListener("click", function () {
     var chain = Promise.resolve();

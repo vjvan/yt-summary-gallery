@@ -142,7 +142,7 @@ export default function FeaturedPage() {
         <div className="bg-gradient-to-br from-orange-500 to-orange-600 text-white rounded-2xl p-10 text-center shadow-xl">
           <h2 className="text-3xl font-black mb-3">想要自己的知識萃取庫?</h2>
           <p className="text-lg opacity-95 mb-6 max-w-xl mx-auto leading-relaxed">
-            完整工具 + 跨影片搜尋 + 個人筆記 + 9 種卡片智能布局,
+            完整工具 + 跨影片搜尋 + 個人筆記 + 20 頁社群學習卡,
             <br />
             是 P2P AI Lab Premium 訂閱者的專屬武器。
           </p>
