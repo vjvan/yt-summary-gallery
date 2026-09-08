@@ -82,8 +82,13 @@ export function checkTranslation({ segments, current, items, glossary, toTraditi
     CONTROL.lastIndex = 0;
     let text = normalizeTaiwanSubtitle(raw.replace(CONTROL, ' ').replace(/\s+/g, ' ').trim(), glossary, toTraditional);
     const label = splitSpeakerLabel(source);
-    // 先驗正文，再接標籤：只有標籤或只有 >> 的輸入不能靠補回的標籤混過去。
-    const body = (label.label && text.startsWith(label.label) ? text.slice(label.label.length) : text).replace(/^\s*>{2,}\s*/, '').trim();
+    // 先驗正文，再接標籤：只有標籤或只有 >> 的輸入（含兩者任意順序、重複）不能靠補回的標籤混過去。
+    let body = text.trim();
+    for (let guard = 0; guard < 4; guard++) {
+      const stripped = (label.label && body.startsWith(label.label) ? body.slice(label.label.length) : body).replace(/^\s*>{2,}\s*/, '').trim();
+      if (stripped === body) break;
+      body = stripped;
+    }
     if (!hasContent(body)) { errors.push(`[${index}] 譯文空白`); continue; }
     if (/^>{2,}(?:\s|$)/.test(label.text) && !/^(?:[^>]*\s)?>{2,}/.test(text)) { text = `>> ${text}`; warnings.push('行首 >> 已自動補回'); }
     if (label.label && !text.startsWith(label.label)) { text = `${label.label} ${text}`; warnings.push('講者標籤已自動補回'); }

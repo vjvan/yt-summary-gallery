@@ -65,6 +65,9 @@ export function getDb() {
     // Carousel 三軸樣式。NULL 舊資料由 resolveCardStyle 使用預設，不改寫歷史內容。
     addCol("card_style", "TEXT");
     addCol("card_render_token", "TEXT");
+    // 整份重寫中譯的寫入權（跨 process 互斥），見 lib/subtitle-writers.ts
+    addCol("subtitle_write_token", "TEXT");
+    addCol("subtitle_write_until", "INTEGER");
 
     // Private learning data is isolated from summaries JSON and existing cloud sync.
     migrateLearningStorage(db);

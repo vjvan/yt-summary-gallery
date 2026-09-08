@@ -57,14 +57,16 @@ if (command === 'export') {
   fs.mkdirSync(out, { recursive: true });
   fs.writeFileSync(path.join(out, `${row.video_id}.en.txt`), segments.map(fmt).join('\n') + '\n');
   const manifest: TranslationManifest = { videoId: row.video_id, summaryId: row.id, sourceHash, cues: segments.length, exportedAt: new Date().toISOString() };
-  fs.writeFileSync(path.join(out, `${row.video_id}.manifest.json`), JSON.stringify(manifest, null, 2) + '\n');
+  // 檔名帶原文 hash：原文改過後再匯出會多一個檔而不是覆蓋舊的，舊譯文不會憑空取得新指紋。
+  fs.writeFileSync(path.join(out, `${row.video_id}.${sourceHash.slice(0, 8)}.manifest.json`), JSON.stringify(manifest, null, 2) + '\n');
   // 給翻譯者看的字庫：keep 逐字保留、term map 優先採用、style rules 口吻。
   fs.writeFileSync(path.join(out, 'glossary.md'), [
     '## keep（逐字保留，不翻）', glossary.no_translate_terms.join('、'), '',
     '## term map（優先採用）', glossary.term_map.map(([en, zh]) => `${en} → ${zh}`).join('；'), '',
     '## style rules', ...glossary.style_rules.map((rule, index) => `${index + 1}. ${rule}`), '',
   ].join('\n'));
-  console.log(`已寫 ${path.join(out, `${row.video_id}.en.txt`)}（${segments.length} 句）、${row.video_id}.manifest.json 與 glossary.md`);
+  console.log(`已寫 ${path.join(out, `${row.video_id}.en.txt`)}（${segments.length} 句）、${row.video_id}.${sourceHash.slice(0, 8)}.manifest.json 與 glossary.md`);
+  console.log('譯文請放在同一個目錄；一個目錄只放一次匯出的東西，check／load 會用旁邊那份指紋核對。');
   const size = Number(flag('--batches') ?? 0);
   if (size > 0) {
     const windows = buildReviewWindows(toReviewCues(segments, null));
@@ -89,10 +91,13 @@ if (command === 'export') {
 if (!zhPath) usage();
 
 /* ---------- 來源指紋 ---------- */
-const manifestPath = flag('--manifest') ?? path.join(path.dirname(path.resolve(zhPath)), `${row.video_id}.manifest.json`);
+const zhDir = path.dirname(path.resolve(zhPath));
+const found = fs.existsSync(zhDir) ? fs.readdirSync(zhDir).filter(name => name.endsWith('.manifest.json')).sort() : [];
+const manifestPath = flag('--manifest') ?? (found.length === 1 ? path.join(zhDir, found[0]) : null);
 const manifestErrors: string[] = [];
 if (has('--no-manifest')) console.log('警告 跳過來源指紋核對（--no-manifest）；只有你確定原文字幕沒變才這樣做。');
-else if (!fs.existsSync(manifestPath)) manifestErrors.push(`找不到來源指紋 ${manifestPath}；請用 export 產生，或確定原文沒變再加 --no-manifest`);
+else if (found.length > 1 && !flag('--manifest')) manifestErrors.push(`${zhDir} 有 ${found.length} 份來源指紋（${found.join('、')}），分不清這份譯文屬於哪一次匯出；請把每次匯出放在各自的目錄，或用 --manifest 指定`);
+else if (!manifestPath || !fs.existsSync(manifestPath)) manifestErrors.push(`在 ${zhDir} 找不到來源指紋；請用 export 產生，或確定原文沒變再加 --no-manifest`);
 else {
   let manifest: unknown;
   try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch { manifest = null; }
@@ -152,24 +157,27 @@ async function main() {
   });
   const store = new SubtitleReviewStore(db);
   const service = new SubtitleReviewService({ db, store, model: () => model, processingMode: () => 'local', glossary: () => glossary, request: requestLocalTranslation, projectRoot: path.resolve(__dirname, '..') });
-  const outcome = db.transaction(() => {
+  // 一個交易只做狀態：建立批次、存候選、把所有與現行不同的句子標成已採用（包含之前套用過又被整片重譯蓋掉的，
+  // 讓它們回到同一批，「還原上一批」才退得乾淨）。字幕檔的實體寫入留在交易外，回滾不會留下不一致的檔案。
+  const prepared = db.transaction(() => {
     store.recoverExpired();
     const started = store.start(row!.id, sourceHash, model, SUBTITLE_REVIEW_VERSION, windows.length);
     if (!started.started || !started.token) throw new Error('這支影片的語意校訂正在跑，先取消或等它結束（租約 180 秒過期會自動回收）。');
     store.saveCandidates(row!.id, started.token, sourceHash, model, candidates, SUBTITLE_REVIEW_VERSION);
     const changed = candidates.filter(item => item.changed).map(item => item.cueIndex);
-    store.decide(row!.id, sourceHash, changed, 'approved');
-    store.finish(row!.id, started.token, { stage: 'complete', completed: windows.length, total: windows.length, message: `外部譯文載入：${candidates.length} 句候選（${model}），${changed.length} 句與現行不同，已全部標為已採用。` }, false);
-    if (!has('--apply')) return { changed: changed.length, applied: null as null | { applied: number; batchId: string | null; exportError: string | null }, reapplied: 0 };
-    const applied = service.apply(row!.id, sourceHash);
-    // 曾套用又被整片重譯蓋掉的句子仍是 applied，apply 不會再寫；用 reapply 把這次匯入的內容補回去。
-    const drifted = service.get(row!.id).drifted;
-    const reapplied = drifted > 0 ? service.reapply(row!.id, sourceHash).applied : 0;
-    return { changed: changed.length, applied: { applied: applied.applied, batchId: applied.batchId, exportError: applied.exportError }, reapplied };
+    store.decide(row!.id, sourceHash, changed, 'approved', { includeApplied: true });
+    return { token: started.token, changed: changed.length };
   })();
-  console.log(`已載入 ${candidates.length} 句候選，${outcome.changed} 句標為已採用。`);
-  if (!outcome.applied) { console.log('尚未寫回字幕；到影片頁「語意校訂」分頁按「套用已採用」，或重跑加 --apply。'); return; }
-  console.log(`已套用 ${outcome.applied.applied} 句，批次 ${outcome.applied.batchId}${outcome.reapplied ? `，另補套 ${outcome.reapplied} 句被覆蓋過的已寫回句` : ''}${outcome.applied.exportError ? `；字幕檔匯出失敗：${visible(outcome.applied.exportError)}` : '，SRT／VTT 已重寫'}。面板「還原上一批」可整批退回。`);
+  console.log(`已載入 ${candidates.length} 句候選，${prepared.changed} 句標為已採用。`);
+  // token 仍握在手上，別的 process 這段期間無法替換候選。
+  try {
+    if (!has('--apply')) { console.log('尚未寫回字幕；到影片頁「語意校訂」分頁按「套用已採用」，或重跑加 --apply。'); return; }
+    const applied = service.apply(row!.id, sourceHash);
+    console.log(`已套用 ${applied.applied} 句，批次 ${applied.batchId}${applied.exportError ? `；字幕檔匯出失敗：${visible(applied.exportError)}（可在面板按「重新匯出字幕檔」）` : '，SRT／VTT 已重寫'}。面板「還原上一批」可整批退回。`);
+  } finally {
+    store.finish(row!.id, prepared.token, { stage: 'complete', completed: windows.length, total: windows.length,
+      message: `外部譯文載入：${candidates.length} 句候選（${model}），${prepared.changed} 句與現行不同。` }, false);
+  }
 }
 
 void main().catch(error => { console.error(visible(error instanceof Error ? error.message : String(error))); process.exit(1); });

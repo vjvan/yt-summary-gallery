@@ -14,7 +14,7 @@ export function getSubtitleReviewService(): SubtitleReviewService {
     const db = getDb();
     runtime.__subtitleReviewServiceV1 = new SubtitleReviewService({
       db, store: new SubtitleReviewStore(db), model: subtitleReviewModel, processingMode, glossary: getGlossary, request: requestLocalTranslation,
-      jobActive: id => libraryJobActive(id) || subtitleWriteActive(id),
+      jobActive: id => libraryJobActive(id) || subtitleWriteActive(id, db),
     });
   }
   return runtime.__subtitleReviewServiceV1;

@@ -25,8 +25,8 @@ API：`GET/POST/PATCH /api/summaries/{id}/subtitle-review`，細節見路由檔�
 ## 已知未做（backlog）
 
 - 跨 worker 取消：取消只清掉租約與本 process 的 controller；另一個 worker 正在跑的模型呼叫要到下一個檢查點才會自己退出，這段期間可能同時有兩個推論在跑。需要跨 worker 的取消通知才能做到嚴格「一次一部」。
-- 外部翻譯匯入（`scripts/translation-import.ts`）：載入前以 HTTP 問服務端 `writerActive`，整段寫入在一個資料庫交易內；但 CLI 與服務端仍靠這個探測而非持久化鎖，嚴格互斥要等下面那條。
-- 跨 process 的字幕寫入互斥：套用／還原在交易內重讀字幕字串與工作狀態（status、subtitle_status、鎖、`lib/subtitle-writers.ts` 登記簿）做 CAS，重新翻譯與字幕續作也會登記；但登記簿只在同一個 Node process 有效，多 worker 部署需要持久化的字幕版本號。已寫回的句子若之後仍被整片重寫覆蓋，面板會顯示漂移句數並提供「重新套用」。
+- 跨 process 的字幕寫入互斥（**2026-09-08 已做**）：整片重新翻譯開始前取得 `summaries.subtitle_write_token`（60 分鐘到期自動回收），語意校訂的套用／還原與外部譯文匯入在交易內看到佔用就回 409。仍未涵蓋的是：
+- 舊版的其餘互斥細節：套用／還原在交易內重讀字幕字串與工作狀態（status、subtitle_status、鎖、`lib/subtitle-writers.ts` 登記簿）做 CAS，重新翻譯與字幕續作也會登記；但登記簿只在同一個 Node process 有效，多 worker 部署需要持久化的字幕版本號。已寫回的句子若之後仍被整片重寫覆蓋，面板會顯示漂移句數並提供「重新套用」。
 - 燒錄版本：套用字幕後，已燒錄的中文／雙語 MP4 不會被標成過期，再按燒錄會直接拿到舊檔。要做「字幕版本」綁定燒錄產物，套用後允許人工重燒。
 - 對齊方式：句與句之間已用句子錨點對齊（v2）；一句跨多個 cue 時句內仍是字數比例加標點吸附，時間分配可能偏幾個字，不會偏一句。
 

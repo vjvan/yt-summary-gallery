@@ -31,7 +31,7 @@ function fixture(mode: 'local' | 'cloud', library: ReturnType<typeof libraryTran
   const service = new WatchService({
     store, provider,
     source: async () => ({ videoId, title: 'fixture', language: 'en', sourceKind: 'manual', trackId: 'fixture', cues }),
-    translate: async ({ targets }) => { calls++; translatedIds.push(...targets.map(cue => cue.id)); return targets.map(cue => ({ ...cue, originalText: cue.text, text: `模型：${cue.id}` })); },
+    translate: async ({ targets }) => { calls++; translatedIds.push(...targets.map(cue => cue.id)); return targets.map(cue => ({ ...cue, originalText: cue.text, text: `模型${cue.id.replace('cue-', '')}` })); },
     glossary: () => ({ no_translate_terms: [], term_map: [], style_rules: [] }), enabled: () => true, limits: () => ({ sessionCalls: 25, dailyCalls: 100 }),
     library: () => library,
   });
@@ -68,7 +68,7 @@ test('local mode: library hits come back as cachedCues, are written to the cue c
   const window = await service.window(created.sessionId, 0, true);
   assert.equal(counters.calls, 1);
   assert.deepEqual(counters.translatedIds, ['cue-2'], 'only the cue the library does not have is translated');
-  assert.deepEqual(window.cues.map(cue => cue.text), ['合成器節點。', '它有潛力改變一切。', '模型：cue-2']);
+  assert.deepEqual(window.cues.map(cue => cue.text), ['合成器節點。', '它有潛力改變一切。', '模型2']);
   // 第二次開同一支影片：庫內命中已經在快取裡，就算庫查不到也不會再叫模型。
   const again = fixture('local', null);
   const second = await again.service.start(`https://www.youtube.com/watch?v=${videoId}`);
@@ -106,7 +106,7 @@ test('the library beats a stale per-cue and window cache from an earlier full pr
   const stale = fixture('local', null);
   const first = await stale.service.start(`https://www.youtube.com/watch?v=${videoId}`);
   const staleWindow = await stale.service.window(first.sessionId, 0, true);
-  assert.deepEqual(staleWindow.cues.map(cue => cue.text), ['模型：cue-0', '模型：cue-1', '模型：cue-2']);
+  assert.deepEqual(staleWindow.cues.map(cue => cue.text), ['模型0', '模型1', '模型2']);
   // 同一個快取，接上影片庫：開影片就拿到庫內譯文，整窗也不再回舊快取，且舊快取被覆寫。
   const service = new WatchService({
     store: stale.store, provider: () => ({ processingMode: 'local', unlimited: true, translationModel: 'mock', translationConfigured: true, audioConfigured: false }),
@@ -163,11 +163,21 @@ test('library lookup refuses ambiguous repeats, misaligned rows and untranslated
     JSON.stringify([{ start: 99, end: 103, text: '（99 秒的譯文）' }, { start: 4, end: 8, text: '它有潛力改變一切。' }]));
   const misaligned = libraryTranslationsFrom(db, videoId);
   assert.equal(misaligned, null, 'nothing usable survives validation');
-  // 舊管線失敗留下英文原句、或把 react 當品牌：不當成命中。
+  // 舊管線失敗留下英文原句：不當成命中；但譯文裡合理保留的品牌名不受影響。
   const leftover = libraryTranslationsFrom(libraryDb([{ start: 0, text: 'The compositor node.', zh: 'The compositor node.' }]), videoId);
   const { service, counters } = fixture('local', leftover);
   const created = await service.start(`https://www.youtube.com/watch?v=${videoId}`);
   assert.equal(created.cachedCues?.length, 0, 'an untranslated library row is not a hit');
   await service.window(created.sessionId, 0, true);
   assert.equal(counters.calls, 3, 'all three cues fall through to the model, one call each');
+  // 好譯文裡保留的品牌與工具名（podcast、HeyGen）不能被守門誤殺。
+  const brands = libraryTranslationsFrom(libraryDb([
+    { start: 0, text: 'The compositor node.', zh: '我聽 podcast 學會用 HeyGen 做 vibe coding。' },
+    { start: 4, text: 'It has the potential to change everything.', zh: '它有潛力改變一切。' },
+    { start: 8, text: 'This line is only in the extension.', zh: '這句也在庫裡。' },
+  ]), videoId);
+  const kept = fixture('local', brands);
+  const opened = await kept.service.start(`https://www.youtube.com/watch?v=${videoId}`);
+  assert.equal(opened.cachedCues?.length, 3, 'translations that keep brand names are still hits');
+  assert.equal(kept.counters.calls, 0);
 });

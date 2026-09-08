@@ -9,7 +9,7 @@ import { WatchError, LOCAL_QUALITY_REASONS, safeLocalQualityReason } from './err
 import { withVideoTermbase } from './termbase';
 import type { WatchSessionView, WatchSource, WatchWindowResult, WatchLimits, WatchProviderInfo, WatchCue, WatchCueFailure, TranslatedCue } from './types';
 import { watchProviderInfo, watchProviderStatus } from './provider';
-import { hasOrdinaryReactVerb } from './protected-terms';
+import { hasOrdinaryReactVerb, protectedNamesOnlyText } from './protected-terms';
 import { libraryTranslations, type LibraryTranslations } from './library-lookup';
 
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -93,20 +93,41 @@ export class WatchService {
     // 本機模式：影片庫是真相，先查庫（語意校訂或外部翻譯套用過的句子比舊快取好），命中就覆寫逐句快取；
     // 庫裡沒有的才看快取。整片都在庫裡時，擴充一句模型都不會叫。
     const cachedCues = provider.processingMode === 'local'
-      ? source.cues.flatMap(cue => { const cached = this.fromLibrary(session, cue) ?? this.deps.store.getCue(cueKey(session.cachePrefix, cue, session.glossary), cue); return cached ? [cached] : []; })
+      ? source.cues.flatMap(cue => { const cached = this.fromLibrary(session, cue) ?? this.cachedCue(session, cue); return cached ? [cached] : []; })
       : undefined;
     return { ...source, ...provider, sessionId, glossaryVersion, translationEnabled: this.deps.enabled() && provider.translationConfigured && (provider.translationReady ?? true), limits: this.limits(provider),
       ...(cachedCues ? { cachedCues } : {}) };
   }
 
   /** 影片庫命中就寫進逐句快取（同一把鍵），下次直接命中快取；寫入失敗不影響回傳。 */
+  /**
+   * 庫內譯文的最低品質守門：舊管線失敗時會把英文原樣留著卻仍標成已翻譯，這種不能當命中。
+   * 只看「整句有沒有中文」；譯文裡合理保留的品牌與工具名（podcast、HeyGen、vibe coding）是好譯文的一部分，
+   * 不能拿逐句翻譯的殘留英文規則來擋。純保留名稱的句子（例如 Figma → Figma）本來就沒有中文，屬合法。
+   */
+  private usable(session: Session, cue: WatchCue, candidate: TranslatedCue): boolean {
+    const letters = (cue.text.match(/[A-Za-z]/g) ?? []).length;
+    return letters < 3 || /[㐀-鿿]/.test(candidate.text) || protectedNamesOnlyText(cue, session.glossary) !== null;
+  }
+
+  /**
+   * 庫裡有這句、但內容沒通過守門（例如舊管線失敗留下的英文）：連快取也不信，交回模型。
+   * 之前版本的庫內優先沒有守門，可能已經把同一份內容寫進逐句快取，換個讀取路徑就會復活。
+   * 庫裡沒有這句的影片維持原本的快取語意，不重新驗證既有快取。
+   */
+  private libraryRejected(session: Session, cue: WatchCue): boolean {
+    const hit = session.library?.find(cue);
+    return !!hit && !this.usable(session, cue, hit);
+  }
+
+  private cachedCue(session: Session, cue: WatchCue): TranslatedCue | undefined {
+    if (this.libraryRejected(session, cue)) return undefined;
+    return this.deps.store.getCue(cueKey(session.cachePrefix, cue, session.glossary), cue);
+  }
+
   private fromLibrary(session: Session, cue: WatchCue): TranslatedCue | undefined {
     const hit = session.library?.find(cue);
-    if (!hit || !translationMatchesSource(hit, cue)) return undefined;
-    // 最低品質守門：原文是英文句子時譯文要有中文（舊管線失敗會把英文原樣留著）；react 當普通動詞時不能原樣留成品牌名。
-    const letters = (cue.text.match(/[A-Za-z]/g) ?? []).length;
-    if (letters >= 3 && !/[㐀-鿿]/.test(hit.text)) return undefined;
-    if (hasOrdinaryReactVerb(cue, session.glossary) && /\bReact\b/.test(hit.text)) return undefined;
+    if (!hit || !translationMatchesSource(hit, cue) || !this.usable(session, cue, hit)) return undefined;
     if (session.provider.processingMode === 'local') {
       try { this.deps.store.putCue(cueKey(session.cachePrefix, cue, session.glossary), cue, hit); } catch { /* 快取寫不進去仍可顯示 */ }
     }
@@ -139,7 +160,10 @@ export class WatchService {
     const libraryHits = session.library ? targets.map(cue => this.fromLibrary(session, cue)) : [];
     const libraryComplete = targets.length > 0 && libraryHits.length === targets.length && libraryHits.every(Boolean);
     // 本機模式部分命中就走逐句路徑（庫內句優先、其餘看逐句快取）；雲端模式整窗快取照舊，不然部分命中的窗每次重讀都再付一次費。
-    const cached = local ? (libraryHits.some(Boolean) ? undefined : this.deps.store.getMatching(key, targets)) : this.deps.store.get(key);
+    // 庫裡有但沒通過守門的句子，整窗快取也不信（同上）。
+    const poisoned = session.library ? targets.some(cue => this.libraryRejected(session, cue)) : false;
+    const windowCache = poisoned ? undefined : local ? this.deps.store.getMatching(key, targets) : this.deps.store.get(key);
+    const cached = local ? (libraryHits.some(Boolean) ? undefined : windowCache) : windowCache;
     const result = (cues: WatchWindowResult['cues'], cache: boolean, failedCues: WatchCueFailure[] = []): WatchWindowResult => ({
       sessionId: id, windowKey, cues, cached: failedCues.length ? false : cache,
       callsUsed: session.calls, dailyCallsUsed: this.deps.store.used(provider.processingMode),
@@ -157,7 +181,7 @@ export class WatchService {
     const savedCues = new Map<string, TranslatedCue>();
     if (local) {
       targets.forEach((cue, position) => {
-        const saved = libraryHits[position] ?? this.deps.store.getCue(cueKey(session.cachePrefix, cue, session.glossary), cue);
+        const saved = libraryHits[position] ?? this.cachedCue(session, cue);
         if (saved) savedCues.set(cue.id, saved);
       });
       // Reconstruct complete windows from the library plus validated cue cache without reserving work.

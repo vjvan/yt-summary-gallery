@@ -4,7 +4,7 @@ import { translateSegments, translatePlainText } from "@/lib/pipeline/translate"
 import { writeSubtitleFiles } from "@/lib/pipeline/burn-bilingual";
 import path from "path";
 import type { TranscriptSegment } from "@/lib/pipeline/fetch-transcript";
-import { beginSubtitleWrite } from "@/lib/subtitle-writers";
+import { claimSubtitleWrite } from "@/lib/subtitle-writers";
 
 /**
  * POST /api/summaries/{id}/retranslate
@@ -27,8 +27,10 @@ export async function POST(
 
   const segments = JSON.parse(row.segments) as TranscriptSegment[];
 
-  // 登記「整份重寫中譯」的工作：語意校訂在這段期間會拒絕套用／還原，避免人工修改被整片覆蓋。
-  const endSubtitleWrite = beginSubtitleWrite(row.id);
+  // 取得「整份重寫中譯」的寫入權（資料庫 claim，跨 process）：語意校訂與外部譯文匯入在這段期間
+  // 會拒絕套用／還原，避免人工修改被整片覆蓋；拿不到代表別的工作正在寫。
+  const endSubtitleWrite = claimSubtitleWrite(row.id, db);
+  if (!endSubtitleWrite) return NextResponse.json({ error: "這支影片的字幕正在被其他工作重寫，請等它結束再重新翻譯。" }, { status: 409 });
   // Async,client 立刻拿 202,前端 polling
   (async () => {
     try {
