@@ -12,6 +12,7 @@ import { writeSubtitleFiles } from "@/lib/pipeline/burn-bilingual";
 import { runVideoPipeline } from "@/lib/pipeline/run-video-pipeline";
 import type { TranscriptResult } from "@/lib/pipeline/fetch-transcript";
 import path from "path";
+import fs from "fs";
 import crypto from "crypto";
 import { processingMode } from "@/lib/watch/provider";
 import { canonicalYouTubeUrl } from "@/lib/watch/source";
@@ -105,10 +106,14 @@ async function runVideoUrlPipeline(id: string, url: string, contentId: string) {
 
   if (probe && captions) {
     const durationDisplay = probe.duration ? `${Math.floor(probe.duration / 60)}:${String(Math.floor(probe.duration % 60)).padStart(2, "0")}` : "";
-    // 沒有本機影片檔:標成非影片項目,播放器不會指向不存在的檔案,燒字幕也不會被提供。
+    // 沒有本機影片檔:video_url 留 null(播放器那格會顯示「沒有下載原片」而不是空播放器),
+    // is_video 保持 1,字幕下載與逐字稿入口照常。前一次若已下載過原片且檔案還在,保留那個引用不要變孤兒。
+    const existingVideo = db.prepare("SELECT video_url FROM summaries WHERE id = ?").get(id) as { video_url: string | null } | undefined;
+    const keepVideo = existingVideo?.video_url && fs.existsSync(path.join(projectRoot, "public", existingVideo.video_url.replace(/^\//, "")))
+      ? existingVideo.video_url : null;
     db.prepare(
-      "UPDATE summaries SET is_video = 0, video_url = NULL, title = ?, channel = ?, thumbnail_url = ?, duration = ?, duration_display = ? WHERE id = ?"
-    ).run(probe.title, probe.channel, probe.thumbnailUrl, probe.duration, durationDisplay, id);
+      "UPDATE summaries SET is_video = 1, video_url = ?, title = ?, channel = ?, thumbnail_url = ?, duration = ?, duration_display = ? WHERE id = ?"
+    ).run(keepVideo, probe.title, probe.channel, probe.thumbnailUrl, probe.duration, durationDisplay, id);
     await runVideoPipeline({
       id, contentId, videoPath: null, tmpDir, captions,
       title: probe.title, channel: probe.channel, duration: probe.duration, thumbnailUrl: probe.thumbnailUrl,

@@ -1103,6 +1103,13 @@ function VideoPlayerPanel({
 
   return (
     <div className="mb-6">
+      {/* 網站自帶字幕的來源（X、Vimeo…）不會下載原片：沒有可播的檔案就不要放一個空的播放器，
+          但字幕下載與逐字稿照常提供。 */}
+      {!playSrc ? (
+        <div className="rounded-xl border border-dashed border-stone-300 bg-stone-50 p-5 mb-3 text-sm leading-6 text-stone-600">
+          這支影片用的是來源網站自帶的字幕，沒有下載原片，所以這裡沒有播放器。字幕檔與逐字稿都在下面，影片請回原始連結觀看。
+        </div>
+      ) : (
       <div className="rounded-xl overflow-hidden bg-black mb-3">
         <video
           ref={videoRef}
@@ -1123,8 +1130,9 @@ function VideoPlayerPanel({
           )}
         </video>
       </div>
+      )}
 
-      {showSoftSubs && srtBiPath && (
+      {showSoftSubs && playSrc && srtBiPath && (
         <p className="text-xs text-center text-gray-400 mb-3">
           字幕已即時掛上(瀏覽器原生)。要更換軌道請點 player 右下角字幕按鈕
         </p>
