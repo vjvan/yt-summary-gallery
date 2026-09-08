@@ -38,6 +38,7 @@
 ## 本機服務與開機問題
 
 - 正式入口為 `http://127.0.0.1:3000/`；舊 `3111` 僅是導向。
+- **正式 3000 的語意校訂模型是 `qwen3.8:27b`（2026-09-08 允雷定案）**：由 launchd plist 的 `SUBTITLE_REVIEW_MODEL` 帶入，重裝自啟要用 `SUBTITLE_REVIEW_MODEL=qwen3.8:27b scripts/launchd-3000.sh install`，否則退回 7B。逐句首輪翻譯仍是 `qwen2.5:7b`。每窗約 35 到 40 秒，40 窗一輪約 25 分鐘。
 - **登入自啟已完成（2026-09-08）**：launchd 使用者代理程式 `com.vjvan.yt-summary-gallery`，管理指令 `scripts/launchd-3000.sh {status|restart|stop|install|uninstall}`，細節與驗證證據見 `docs/watch-local.md` 的「登入自啟」。bootstrap、`kill -9` 自動重啟、`kickstart -k` 都實測過；**真正的重開機登入尚未實測**，下次登入先跑 `status`。
 - 前置的安全項目已做：`recoverZombieJobs()` 預設不續跑舊摘要管線（`YT_SUMMARY_AUTO_RESUME=1` 才續跑），中斷任務標成可重試 error、產物保留；測試 `tests/resume-gate.test.ts` 用會爆炸的模型替身證明關閉時零模型呼叫。
 - 部署：備份 DB → 確認沒有 processing／burning／持鎖列 → `npm run build` → `scripts/launchd-3000.sh restart`。不要再用 nohup 手動起，launchd 會跟它搶埠。

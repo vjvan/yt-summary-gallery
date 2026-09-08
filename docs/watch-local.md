@@ -116,7 +116,7 @@ log 在 `data/launchd-3000.log` 與 `data/launchd-3000.err.log`。plist 只設 `
 
 - `WATCH_LOCAL_MODELS_DIR`：模型根目錄。
 - `WATCH_LOCAL_MODEL`：已安裝本機模型名稱，預設 `qwen2.5:7b`；不接受雲端標籤或網址。
-- `SUBTITLE_REVIEW_MODEL`：語意校訂專用的本機模型，沒設就同 `WATCH_LOCAL_MODEL`。校訂一次只跑一窗、量少，可以換大一點的模型；2026-09-08 用 `scripts/review-probe.ts` 在兩個真實視窗實測：`qwen2.5:7b` 每窗約 2 秒、會殘留英文與把 £5,000 翻成五萬；`translategemma:12b` 約 8 秒、數字與語意最穩但會自作主張補貨幣（美元）；`qwen3.8:27b` 約 34 秒、最準；`qwen3.5:9b` 是思考型模型，輸出額度會被思考吃光，不可用。用 launchd 跑 3000 時要在 install 當下設：`SUBTITLE_REVIEW_MODEL=translategemma:12b scripts/launchd-3000.sh install`。
+- `SUBTITLE_REVIEW_MODEL`：語意校訂專用的本機模型，沒設就同 `WATCH_LOCAL_MODEL`。校訂一次只跑一窗、量少，可以換大一點的模型；2026-09-08 用 `scripts/review-probe.ts` 在兩個真實視窗實測：`qwen2.5:7b` 每窗約 2 秒、會殘留英文與把 £5,000 翻成五萬；`translategemma:12b` 約 8 秒、數字與語意最穩但會自作主張補貨幣（美元）；`qwen3.8:27b` 約 34 秒、最準；`qwen3.5:9b` 是思考型模型，輸出額度會被思考吃光，不可用。用 launchd 跑 3000 時要在 install 當下設：`SUBTITLE_REVIEW_MODEL=qwen3.8:27b scripts/launchd-3000.sh install`。**2026-09-08 起正式 3000 的校訂模型是 `qwen3.8:27b`**（允雷定案；逐句首輪翻譯仍是 `qwen2.5:7b`），之後重裝自啟記得帶同一個環境變數，不然會退回 7B。
 - `WATCH_LOCAL_WHISPER_MODEL`、`WATCH_LOCAL_WHISPER_BIN`、`WATCH_LOCAL_OLLAMA_BIN`：需要絕對路徑。
 - `watch:local` 強制 `WATCH_PROCESSING_MODE=local`，不會因為舊 `.env.local` 有 API key 而改用雲端。
 - `WATCH_PROCESSING_MODE=cloud` 只有營運者明確使用一般啟動指令設定時才生效；其費用同意與額度限制仍存在。
