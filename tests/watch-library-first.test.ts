@@ -181,3 +181,21 @@ test('library lookup refuses ambiguous repeats, misaligned rows and untranslated
   assert.equal(opened.cachedCues?.length, 3, 'translations that keep brand names are still hits');
   assert.equal(kept.counters.calls, 0);
 });
+
+test('a cue the library got wrong is translated once, and the good result is then served from cache without re-inference', async () => {
+  const bad = libraryTranslationsFrom(libraryDb([
+    { start: 0, text: 'The compositor node.', zh: 'The compositor node.' },
+    { start: 4, text: 'It has the potential to change everything.', zh: '它有潛力改變一切。' },
+    { start: 8, text: 'This line is only in the extension.', zh: '這句也在庫裡。' },
+  ]), videoId);
+  const { service, counters } = fixture('local', bad);
+  const created = await service.start(`https://www.youtube.com/watch?v=${videoId}`);
+  assert.deepEqual(created.cachedCues?.map(cue => cue.text), ['它有潛力改變一切。', '這句也在庫裡。'], 'the untranslated library row is not a hit');
+  const first = await service.window(created.sessionId, 0, true);
+  assert.equal(counters.calls, 1, 'only the bad cue goes to the model');
+  assert.deepEqual(first.cues.map(cue => cue.text), ['模型0', '它有潛力改變一切。', '這句也在庫裡。']);
+  const second = await service.window(created.sessionId, 0, true);
+  assert.equal(counters.calls, 1, 'the repaired cache is trusted; a bad library row does not block it forever');
+  assert.equal(second.cached, true);
+  assert.deepEqual(second.cues.map(cue => cue.text), first.cues.map(cue => cue.text));
+});

@@ -120,9 +120,14 @@ export class WatchService {
     return !!hit && !this.usable(session, cue, hit);
   }
 
+  /** 只有「庫內不合格」且「快取本身也不合格」才當成沒有；模型之後翻好的快取照常使用，不會反覆推論。 */
+  private trusted(session: Session, cue: WatchCue, cached: TranslatedCue | undefined): TranslatedCue | undefined {
+    if (!cached) return undefined;
+    return this.libraryRejected(session, cue) && !this.usable(session, cue, cached) ? undefined : cached;
+  }
+
   private cachedCue(session: Session, cue: WatchCue): TranslatedCue | undefined {
-    if (this.libraryRejected(session, cue)) return undefined;
-    return this.deps.store.getCue(cueKey(session.cachePrefix, cue, session.glossary), cue);
+    return this.trusted(session, cue, this.deps.store.getCue(cueKey(session.cachePrefix, cue, session.glossary), cue));
   }
 
   private fromLibrary(session: Session, cue: WatchCue): TranslatedCue | undefined {
@@ -160,9 +165,9 @@ export class WatchService {
     const libraryHits = session.library ? targets.map(cue => this.fromLibrary(session, cue)) : [];
     const libraryComplete = targets.length > 0 && libraryHits.length === targets.length && libraryHits.every(Boolean);
     // 本機模式部分命中就走逐句路徑（庫內句優先、其餘看逐句快取）；雲端模式整窗快取照舊，不然部分命中的窗每次重讀都再付一次費。
-    // 庫裡有但沒通過守門的句子，整窗快取也不信（同上）。
-    const poisoned = session.library ? targets.some(cue => this.libraryRejected(session, cue)) : false;
-    const windowCache = poisoned ? undefined : local ? this.deps.store.getMatching(key, targets) : this.deps.store.get(key);
+    // 整窗快取同理：只有庫內不合格且快取內容也不合格的句子才讓整窗失效。
+    const rawWindow = local ? this.deps.store.getMatching(key, targets) : this.deps.store.get(key);
+    const windowCache = rawWindow?.length === targets.length && rawWindow.some((item, position) => !this.trusted(session, targets[position], item)) ? undefined : rawWindow;
     const cached = local ? (libraryHits.some(Boolean) ? undefined : windowCache) : windowCache;
     const result = (cues: WatchWindowResult['cues'], cache: boolean, failedCues: WatchCueFailure[] = []): WatchWindowResult => ({
       sessionId: id, windowKey, cues, cached: failedCues.length ? false : cache,

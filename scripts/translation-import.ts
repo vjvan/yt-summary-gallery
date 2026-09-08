@@ -22,6 +22,7 @@ import { SubtitleReviewStore } from '../lib/review/store';
 import { SUBTITLE_REVIEW_VERSION, type ReviewCandidate } from '../lib/review/types';
 import { buildReviewWindows, toReviewCues } from '../lib/review/windows';
 import { requestLocalTranslation } from '../lib/watch/local-translator';
+import { subtitleWriteActive } from '../lib/subtitle-writers';
 // @ts-expect-error opencc-js does not ship TypeScript declarations.
 import * as OpenCC from 'opencc-js';
 
@@ -156,7 +157,9 @@ async function main() {
     };
   });
   const store = new SubtitleReviewStore(db);
-  const service = new SubtitleReviewService({ db, store, model: () => model, processingMode: () => 'local', glossary: () => glossary, request: requestLocalTranslation, projectRoot: path.resolve(__dirname, '..') });
+  // jobActive 一定要接：套用是在交易內問這個才知道有沒有人正在整份重寫中譯，HTTP 探測只是提早給訊息。
+  const service = new SubtitleReviewService({ db, store, model: () => model, processingMode: () => 'local', glossary: () => glossary, request: requestLocalTranslation,
+    projectRoot: path.resolve(__dirname, '..'), jobActive: id => subtitleWriteActive(id, db) });
   // 一個交易只做狀態：建立批次、存候選、把所有與現行不同的句子標成已採用（包含之前套用過又被整片重譯蓋掉的，
   // 讓它們回到同一批，「還原上一批」才退得乾淨）。字幕檔的實體寫入留在交易外，回滾不會留下不一致的檔案。
   const prepared = db.transaction(() => {
@@ -173,7 +176,9 @@ async function main() {
   try {
     if (!has('--apply')) { console.log('尚未寫回字幕；到影片頁「語意校訂」分頁按「套用已採用」，或重跑加 --apply。'); return; }
     const applied = service.apply(row!.id, sourceHash);
-    console.log(`已套用 ${applied.applied} 句，批次 ${applied.batchId}${applied.exportError ? `；字幕檔匯出失敗：${visible(applied.exportError)}（可在面板按「重新匯出字幕檔」）` : '，SRT／VTT 已重寫'}。面板「還原上一批」可整批退回。`);
+    // 這次沒寫任何句子（內容與現行相同）時，先前失敗的字幕匯出仍掛在那裡，不能報成已重寫。
+    const exportError = applied.exportError ?? applied.response.exportError;
+    console.log(`已套用 ${applied.applied} 句，批次 ${applied.batchId ?? '（無異動）'}${exportError ? `；字幕檔匯出仍是失敗狀態：${visible(exportError)}（可在面板按「重新匯出字幕檔」）` : '，SRT／VTT 已重寫'}。面板「還原上一批」可整批退回。`);
   } finally {
     store.finish(row!.id, prepared.token, { stage: 'complete', completed: windows.length, total: windows.length,
       message: `外部譯文載入：${candidates.length} 句候選（${model}），${prepared.changed} 句與現行不同。` }, false);

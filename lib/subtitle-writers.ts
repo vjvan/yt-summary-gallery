@@ -20,8 +20,15 @@ function claimColumns(db: Database.Database) {
   }
 }
 
-/** 原子取得寫入權；別人佔用中就回 null。回傳的函式釋放這次的 claim（只認自己的 token）。 */
-export function claimSubtitleWrite(summaryId: string, db: Database.Database = getDb(), now = Date.now()): (() => void) | null {
+export interface SubtitleWriteClaim {
+  token: string;
+  /** 提交前必問：claim 過期被別人接管後，舊持有人不可以再覆蓋新內容。 */
+  held(): boolean;
+  release(): void;
+}
+
+/** 原子取得寫入權；別人佔用中就回 null。 */
+export function claimSubtitleWrite(summaryId: string, db: Database.Database = getDb(), now = Date.now()): SubtitleWriteClaim | null {
   claimColumns(db);
   const token = `w-${now.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   const claimed = db.prepare(`UPDATE summaries SET subtitle_write_token=?, subtitle_write_until=?
@@ -30,11 +37,15 @@ export function claimSubtitleWrite(summaryId: string, db: Database.Database = ge
   if (claimed.changes !== 1) return null;
   const endLocal = beginSubtitleWrite(summaryId);
   let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    try { db.prepare('UPDATE summaries SET subtitle_write_token=NULL, subtitle_write_until=NULL WHERE id=? AND subtitle_write_token=?').run(summaryId, token); }
-    finally { endLocal(); }
+  return {
+    token,
+    held: () => !released && !!db.prepare('SELECT 1 AS ok FROM summaries WHERE id=? AND subtitle_write_token=?').get(summaryId, token),
+    release: () => {
+      if (released) return;
+      released = true;
+      try { db.prepare('UPDATE summaries SET subtitle_write_token=NULL, subtitle_write_until=NULL WHERE id=? AND subtitle_write_token=?').run(summaryId, token); }
+      finally { endLocal(); }
+    },
   };
 }
 

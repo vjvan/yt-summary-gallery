@@ -14,8 +14,9 @@ function fixture() {
 test('a claim is exclusive across processes, releases only its own token, and expires on its own', () => {
   const db = fixture();
   assert.equal(subtitleWriteActive('sum', db), false);
-  const release = claimSubtitleWrite('sum', db)!;
-  assert.ok(release);
+  const first = claimSubtitleWrite('sum', db)!;
+  assert.ok(first);
+  const release = () => first.release();
   assert.equal(subtitleWriteActive('sum', db), true, 'the claim is visible to any process reading this database');
   assert.equal(claimSubtitleWrite('sum', db), null, 'a second writer cannot claim');
   release();
@@ -24,7 +25,8 @@ test('a claim is exclusive across processes, releases only its own token, and ex
   assert.ok(second, 'the slot is free again after release');
   release();
   assert.equal(subtitleWriteActive('sum', db), true, 'a stale release function does not free the new claim');
-  second();
+  assert.equal(second.held(), true, 'the live holder still holds it');
+  second.release();
   // 程序當掉沒釋放（資料庫留著別的 process 的 token）：到期後自動回收。
   db.prepare('UPDATE summaries SET subtitle_write_token=?, subtitle_write_until=? WHERE id=?').run('w-crashed', Date.now() - 1000, 'sum');
   assert.equal(subtitleWriteActive('sum', db), false, 'an expired claim no longer blocks readers');
@@ -32,4 +34,18 @@ test('a claim is exclusive across processes, releases only its own token, and ex
   db.prepare('UPDATE summaries SET subtitle_write_token=?, subtitle_write_until=? WHERE id=?').run('w-live', Date.now() + SUBTITLE_CLAIM_TTL_MS, 'sum');
   assert.equal(claimSubtitleWrite('sum', db), null, 'a live claim from another process blocks us');
   assert.equal(claimSubtitleWrite('missing', db), null, 'an unknown video claims nothing');
+});
+
+test('an expired claim taken over by someone else makes the old holder stop before it writes', () => {
+  const db = fixture();
+  const slow = claimSubtitleWrite('sum', db)!;
+  assert.equal(slow.held(), true);
+  // 舊持有人翻譯超過一小時（或電腦休眠），claim 到期被別人接管。
+  db.prepare('UPDATE summaries SET subtitle_write_until=? WHERE id=?').run(Date.now() - 1000, 'sum');
+  const taker = claimSubtitleWrite('sum', db)!;
+  assert.ok(taker, 'the expired claim can be taken over');
+  assert.equal(slow.held(), false, 'the old holder must not commit its late result');
+  assert.equal(taker.held(), true);
+  slow.release();
+  assert.equal(taker.held(), true, 'the old holder releasing does not free the new claim');
 });
