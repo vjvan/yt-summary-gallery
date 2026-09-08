@@ -22,6 +22,22 @@
 6. **語意校訂 v2 句子錨點（09-08 早）**：允雷回報 8:41 到 9:10 視窗的候選整窗往後滑一句。根因：這支影片 1123 句字幕有 926 句不在句尾斷，v1 整段翻回再按字數比例切，模型多翻（把 after 翻進來）或少翻一點就整窗滑。改法：`lib/review/sentences.ts` 先把視窗切成英文句子（句尾標點、`>>` 換人標記、縮寫不算句尾），模型依 n 逐句回傳（schema 鎖句數），每句譯文只在該句跨到的 cue 之間按比例分配，漂移被關在一句之內；句數不符重試一次再退回 v1 比例切分並在備註標明。數字守門改成量級等價（10K 對 1 萬、50,000 對五萬、21 對二十一），且同一句兩個數字不能共用一個譯文數字。面板每窗多「重新校訂本窗」。`scripts/review-probe.ts` 可對指定視窗跑一次重譯印出候選（不寫 DB），用它比較過四個本機模型，結果寫在 `docs/watch-local.md` 的 `SUBTITLE_REVIEW_MODEL`。舊的 v1 候選在面板會標「舊版」且不算已完成，按「校訂高風險視窗」或該窗的「重新校訂本窗」就用 v2 重譯（重新校訂本窗會略過檢查點快取，真的再叫一次模型）。Codex 兩輪對抗審查（第一輪 1 P1 加 6 P2，第二輪 0 P1 加 7 P2）全部修掉並有回歸測試，紀錄在 vault `projects/yt-translation-tool/codex-reviews/2026-09-08-review-v2-sentence-anchor.md`。
 4. **字幕語意校訂 v1**：`lib/review/*`、`app/api/summaries/{id}/subtitle-review`、`components/SubtitleReviewPanel.tsx`、卡片頁「語意校訂」分頁。話語視窗重譯（本機 Ollama，只送原文與前後文，模型回一段中文，伺服器依原文字數比例切回各句）、純規則風險旗標決定順序、候選逐句採用、套用才寫回 `segments_zh`／`transcript_zh` 與 SRT，並記 `subtitle_revisions` 可整批還原。說明與邊界 `docs/subtitle-review.md`。
 
+## 已知問題：長影片的本機摘要必失敗（2026-09-08 診斷，未修）
+
+56 分鐘的影片走完字幕與翻譯後，`extractLocalSummary` 的 map/reduce 一定會在某一層丟
+`LOCAL_TRANSLATION_TRUNCATED`（面板顯示的是「處理尚未完成」那句通用訊息），整份摘要與圖卡因此失敗；
+字幕、翻譯、SRT 都已寫好且完好，只有摘要與卡片沒有。
+
+診斷（用包住 `request` 的 instrumentation 打出來的）：失敗發生在中間層的分段筆記呼叫，
+例如「第 6 層第 2/2 段」輸入只有 1180 字，輸出仍撞到 `num_predict`。試過但**沒有解決**的方向：
+把 `num_ctx` 從 8192 開到 16384／32768、把筆記的輸出額度從 1800 提到 4000、
+截斷時把該段切一半分別整理再合併。三種都只是讓失敗發生得更晚（19 秒 → 49 秒），沒有讓它通過，
+所以都已回退，不要以為那幾條路試過就有效。
+
+下一步該試的是換方向而不是加額度：分段筆記的 schema 給 `notes` 明確長度上限讓 grammar 自己收斂、
+或把最後那次「一次生 20 頁 social_cards」拆成兩次呼叫、或長影片的摘要改用 `SUBTITLE_REVIEW_MODEL`
+那顆較大的模型。修之前先寫一個用真實長逐字稿的回歸測試，不然很容易再繞一次冤枉路。
+
 ## 驗證狀態
 
 - 程式測試 464（09-08 上午 v2 加兩輪 Codex 修正後）、extension 100 全過；`tsc --noEmit` 乾淨；改動檔 eslint 乾淨（`lib/pipeline/assemble-video.ts`、`detect-source.ts` 各有一條既有 lint 問題，未動）。
