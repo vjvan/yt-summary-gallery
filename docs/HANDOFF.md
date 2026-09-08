@@ -18,11 +18,12 @@
 2. **外部分析貼入**：`POST/DELETE /api/summaries/{id}/import-analysis`。確定性解析器 `lib/pipeline/import-analysis.ts` 把 NotebookLM 繁中報告切成剛好 20 頁 SocialCard，只覆寫 `summary.social_cards` 與 `social_cards_source`（原始 JSON 物件不經正規化重寫），匯入前的兩個欄位原始值與存在旗標備份在新欄位 `summaries.external_analysis`，前端接既有 regenerate-cards 重畫；DELETE 逐字還原。面板 `components/AnalysisImportPanel.tsx`。
 3. **影片庫渲染鎖**：`lib/pipeline/local-youtube-library.ts` 的 `renderLibraryCards` 改為原子取 `card_render_token`（與 regenerate-cards 共用同一欄位互斥），取鎖後才讀最新摘要，發布與失敗清理只認自己的鎖；重啟由 `recoverLocalLibraryJobs` 清鎖。這是 Codex 抓到的跨 worker 圖片覆蓋競態的修法。
 5. **登入自啟與續跑開關（09-08）**：`scripts/launchd-3000.sh` 管理 launchd 代理程式 `com.vjvan.yt-summary-gallery`；`lib/pipeline/resume.ts` 新增 `YT_SUMMARY_AUTO_RESUME` 開關，預設不續跑舊管線。
+6. **語意校訂 v2 句子錨點（09-08 早）**：允雷回報 8:41 到 9:10 視窗的候選整窗往後滑一句。根因：這支影片 1123 句字幕有 926 句不在句尾斷，v1 整段翻回再按字數比例切，模型多翻（把 after 翻進來）或少翻一點就整窗滑。改法：`lib/review/sentences.ts` 先把視窗切成英文句子（句尾標點、`>>` 換人標記、縮寫不算句尾），模型依 n 逐句回傳（schema 鎖句數），每句譯文只在該句跨到的 cue 之間按比例分配，漂移被關在一句之內；句數不符重試一次再退回 v1 比例切分並在備註標明。數字守門改成量級等價（10K 對 1 萬、50,000 對五萬、21 對二十一），且同一句兩個數字不能共用一個譯文數字。面板每窗多「重新校訂本窗」。`scripts/review-probe.ts` 可對指定視窗跑一次重譯印出候選（不寫 DB），用它比較過四個本機模型，結果寫在 `docs/watch-local.md` 的 `SUBTITLE_REVIEW_MODEL`。舊的 v1 候選在面板會標「舊版」且不算已完成，按「校訂高風險視窗」或該窗的「重新校訂本窗」就用 v2 重譯（重新校訂本窗會略過檢查點快取，真的再叫一次模型）。Codex 兩輪對抗審查（第一輪 1 P1 加 6 P2，第二輪 0 P1 加 7 P2）全部修掉並有回歸測試，紀錄在 vault `projects/yt-translation-tool/codex-reviews/2026-09-08-review-v2-sentence-anchor.md`。
 4. **字幕語意校訂 v1**：`lib/review/*`、`app/api/summaries/{id}/subtitle-review`、`components/SubtitleReviewPanel.tsx`、卡片頁「語意校訂」分頁。話語視窗重譯（本機 Ollama，只送原文與前後文，模型回一段中文，伺服器依原文字數比例切回各句）、純規則風險旗標決定順序、候選逐句採用、套用才寫回 `segments_zh`／`transcript_zh` 與 SRT，並記 `subtitle_revisions` 可整批還原。說明與邊界 `docs/subtitle-review.md`。
 
 ## 驗證狀態
 
-- 程式測試 455、extension 100 全過；`tsc --noEmit` 乾淨；改動檔 eslint 乾淨（`lib/pipeline/assemble-video.ts`、`detect-source.ts` 各有一條既有 lint 問題，未動）。
+- 程式測試 464（09-08 上午 v2 加兩輪 Codex 修正後）、extension 100 全過；`tsc --noEmit` 乾淨；改動檔 eslint 乾淨（`lib/pipeline/assemble-video.ts`、`detect-source.ts` 各有一條既有 lint 問題，未動）。
 - 隔離目錄 production build 通過（把 node_modules 用 APFS clone 進隔離目錄，symlink 會被 Turbopack 拒絕）。
 - Chrome 實測（3001 開發伺服器，同一份正式 DB）：來源包 API 回 1123 句雙語；貼入面板 20 頁預覽、匯入後重畫第 1、3、19、20 頁目視正確、還原後回到本機萃取；語意校訂 3 個視窗 30 秒出 18 句候選、採用一句、套用後 DB／逐字稿／SRT 都更新、還原後與匯入前備份逐位元一致。
 - Codex 對抗審查五輪：第一輪 4 P1 → 第五輪 0 P1（剩 5 P2 已修），全程見 vault `projects/yt-translation-tool/codex-reviews/2026-09-07-notebooklm-integration.md`。全部修法都有回歸測試。
@@ -57,6 +58,6 @@ node_modules/.bin/tsc --noEmit
 
 ## 接手後建議順序（不是自動執行授權）
 
-1. 語意校訂品質：用 `docs/translation-calibration-v18.md`（原機）的 12 個難例跑一次校訂管線，逐例人工評；考慮把候選對齊改成錨點對齊而非字數比例。
+1. 語意校訂品質：用 `docs/translation-calibration-v18.md`（原機）的 12 個難例跑 `scripts/review-probe.ts`，逐例人工評；句子錨點已做（v2），剩下的是模型本身的取捨（見 `SUBTITLE_REVIEW_MODEL`）。若允雷決定換校訂模型，重跑 `SUBTITLE_REVIEW_MODEL=… scripts/launchd-3000.sh install`。
 2. 登入自啟：下次真正重開機後跑 `scripts/launchd-3000.sh status` 確認 3000 有起來，並看 `data/launchd-3000.err.log`。
 3. NotebookLM 貼入：多蒐集幾種 NotebookLM 輸出樣式（Study Guide、報告、FAQ）跑 dry-run，看切頁規則哪裡要補。

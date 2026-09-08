@@ -3,6 +3,7 @@
 # 只開服務，不自動生成：舊管線自動續跑由 YT_SUMMARY_AUTO_RESUME 控制，這裡不設定（預設關閉）。
 #
 #   scripts/launchd-3000.sh install    寫入 plist 並 bootstrap（登入即啟動、當掉自動重啟）
+#   SUBTITLE_REVIEW_MODEL=translategemma:12b scripts/launchd-3000.sh install   語意校訂改用另一個本機模型
 #   scripts/launchd-3000.sh status     launchd 狀態 + 3000/3111/11434 是否在聽
 #   scripts/launchd-3000.sh restart    kickstart -k（停掉再拉起，部署新 build 後用）
 #   scripts/launchd-3000.sh stop       bootout（停止並取消自啟，plist 檔保留）
@@ -15,6 +16,13 @@ PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 NODE_BIN="${NODE_BIN:-/opt/homebrew/bin/node}"
 DOMAIN="gui/$(id -u)"
 LOG_DIR="$ROOT/data"
+
+# install 時 shell 有設 SUBTITLE_REVIEW_MODEL 就寫進 plist（語意校訂用另一個本機模型），沒設就不寫。
+review_model_entry() {
+  if [ -n "${SUBTITLE_REVIEW_MODEL:-}" ]; then
+    printf '        <key>SUBTITLE_REVIEW_MODEL</key>\n        <string>%s</string>' "$SUBTITLE_REVIEW_MODEL"
+  fi
+}
 
 write_plist() {
   mkdir -p "$HOME/Library/LaunchAgents" "$LOG_DIR"
@@ -47,6 +55,7 @@ write_plist() {
         <string>en_US.UTF-8</string>
         <key>WATCH_PROCESSING_MODE</key>
         <string>local</string>
+$(review_model_entry)
     </dict>
 
     <key>RunAtLoad</key>

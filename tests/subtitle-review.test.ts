@@ -6,7 +6,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { DEFAULT_GLOSSARY } from '../lib/glossary-defaults';
 import type { requestLocalTranslation } from '../lib/watch/local-translator';
-import { parseReviewOutput, reviewMessages, runSubtitleReview, splitPassage, splitSpeakerLabel, REVIEW_SCHEMA, REVIEW_SYSTEM_PROMPT } from '../lib/review/pipeline';
+import { parseReviewOutput, reviewMessages, runSubtitleReview, splitPassage, splitSpeakerLabel, reviewSchema, REVIEW_SYSTEM_PROMPT, type ReviewPayload } from '../lib/review/pipeline';
 import { SubtitleReviewService } from '../lib/review/service';
 import { SubtitleReviewStore } from '../lib/review/store';
 import { buildReviewWindows, toReviewCues } from '../lib/review/windows';
@@ -25,25 +25,43 @@ const segmentsZh = [
 const cues = toReviewCues(segments, segmentsZh);
 const windows = buildReviewWindows(cues);
 
-/** 以 passage 開頭幾個字當鍵；沒指定就回一段「譯：」開頭、每個英文字對一個中文字的假譯文，讓比例切分有東西可切。 */
+/**
+ * 以視窗原文開頭幾個字當鍵；指定的答案依中文句尾標點拆給各句（多的併到最後一句、少的補「好。」），
+ * 沒指定就每句回「譯：」加一個中文字對一個英文字元的假譯文，讓比例切分有東西可切。
+ */
 function fakeRequest(answers: Record<string, string>): typeof requestLocalTranslation {
   return async input => {
-    const data = JSON.parse(input.messages[1].content) as { passage: string };
-    const key = Object.keys(answers).find(prefix => data.passage.startsWith(prefix));
-    return JSON.stringify({ text: key ? answers[key] : `譯：${'中'.repeat(Math.max(4, Math.ceil(data.passage.length / 2)))}。` });
+    const data = JSON.parse(input.messages[1].content) as ReviewPayload;
+    const joined = data.sentences.map(sentence => sentence.en).join(' ');
+    const key = Object.keys(answers).find(prefix => joined.startsWith(prefix));
+    if (!key) return JSON.stringify({ translations: data.sentences.map(sentence => ({ n: sentence.n, zh: `譯：${'中'.repeat(Math.max(4, Math.ceil(sentence.en.length / 2)))}。` })) });
+    const chunks = answers[key].split(/(?<=[。？！])/).filter(Boolean);
+    while (chunks.length > data.sentences.length) chunks.splice(-2, 2, chunks.slice(-2).join(''));
+    while (chunks.length < data.sentences.length) chunks.push('好。');
+    return JSON.stringify({ translations: data.sentences.map((sentence, index) => ({ n: sentence.n, zh: chunks[index] })) });
   };
 }
 
-test('prompt sends one passage without speaker labels or old translations, with context on both sides', () => {
+test('prompt sends numbered sentences without speaker labels or old translations, and after-context only for an unfinished sentence', () => {
   const window = windows[0];
   const messages = reviewMessages(window, 'Test video', DEFAULT_GLOSSARY);
   assert.equal(messages[0].content, REVIEW_SYSTEM_PROMPT);
-  const payload = JSON.parse(messages[1].content);
-  assert.equal(payload.passage, window.cues.map(cue => cue.source).join(' '));
+  const payload = JSON.parse(messages[1].content) as ReviewPayload & { title?: unknown; passage?: unknown };
+  assert.deepEqual(payload.sentences, [{ n: 1, en: 'right?' }, { n: 2, en: "There's not all these bottlenecks that you have to get up to." }]);
   assert.ok(!messages[1].content.includes('得克服'), 'the old translation is never sent');
   assert.equal(payload.title, undefined, 'the title is not sent: a 7B model translates it into the passage');
-  assert.ok(payload.after.length > 0 && !payload.after.includes('Okay'), 'only one following cue is sent as context');
-  assert.deepEqual(REVIEW_SCHEMA.required, ['text']);
+  assert.equal(payload.passage, undefined);
+  assert.equal(payload.after, '', 'the window ends a sentence, so no following context is sent');
+  const unfinished = toReviewCues([{ start: 0, end: 2, text: 'I was thinking that we' }, { start: 5, end: 7, text: 'should go now, honestly, because it is late and the trains stop soon. Okay.' }], null);
+  const cut = buildReviewWindows(unfinished);
+  assert.equal(cut[0].cues.length, 1, 'a long pause closes the window mid-sentence');
+  const cutPayload = JSON.parse(reviewMessages(cut[0], 'Test', DEFAULT_GLOSSARY)[1].content) as ReviewPayload;
+  assert.equal(cutPayload.after, 'should go now, honestly, because it is late and the trains stop', 'only the first few words of the next cue are sent');
+  assert.equal(reviewMessages(window, 'Test', DEFAULT_GLOSSARY, '再試一次')[0].content, `${REVIEW_SYSTEM_PROMPT}\n再試一次`);
+  const schema = reviewSchema(2);
+  assert.equal(schema.properties.translations.minItems, 2);
+  assert.equal(schema.properties.translations.maxItems, 2);
+  assert.deepEqual(schema.properties.translations.items.required, ['n', 'zh']);
   assert.deepEqual(splitSpeakerLabel('Drew Brucker (04:21) like family movie time.'), { label: 'Drew Brucker (04:21)', text: 'like family movie time.' });
   assert.deepEqual(splitSpeakerLabel('plain words'), { label: '', text: 'plain words' });
 });
@@ -332,5 +350,46 @@ test('service refuses cloud mode, a second run on already covered windows, and a
     assert.equal(rerun.accepted, true);
     await service.settled('vid');
     assert.equal(service.get('vid').candidates.find(item => item.cueIndex === 2)!.decision, 'approved');
+  } finally { db.close(); }
+});
+
+test('re-running a chosen window calls the model again, and candidates from an older review version do not count as done', async () => {
+  let calls = 0;
+  const answers = { "right? There's not": '對吧？不會有那麼多你得跨過的瓶頸。', 'We made millions': '我們去年用 Midjourney 賺了好幾百萬。' };
+  const request: typeof requestLocalTranslation = async input => { calls++; return fakeRequest(answers)(input); };
+  const { db, service } = serviceFixture(request);
+  try {
+    service.start('vid', { scope: 'windows', limit: 40, windowKeys: ['w-0-0'] });
+    await service.settled('vid');
+    assert.equal(calls, 1);
+    assert.equal(service.get('vid').outdated, 0);
+    // 人工「重新校訂本窗」：同樣的原文與提示也要真的再叫一次模型，不能只重讀檢查點。
+    service.start('vid', { scope: 'windows', limit: 40, windowKeys: ['w-0-0'] });
+    await service.settled('vid');
+    assert.equal(calls, 2, 'a manual re-run bypasses the checkpoint cache');
+    // 一般續跑仍吃快取：同一窗不會再推論。
+    service.start('vid', { scope: 'windows', limit: 40, windowKeys: ['w-1-1'] });
+    await service.settled('vid');
+    assert.equal(calls, 3);
+    assert.throws(() => service.start('vid', { scope: 'flagged', limit: 40 }), /已有候選/);
+    // 升版：舊版本的候選要被標成 outdated，且高風險視窗重新排隊。真實升版時檢查點的鍵含版本，不會命中舊快取，這裡把檢查點清掉來模擬。
+    db.prepare("UPDATE subtitle_review_candidates SET version='subtitle-review-v1-discourse-window' WHERE cue_index=0").run();
+    db.prepare('DELETE FROM subtitle_review_checkpoints').run();
+    const upgraded = service.get('vid');
+    assert.equal(upgraded.outdated, 1);
+    assert.equal(upgraded.candidates.find(item => item.cueIndex === 0)?.outdated, true);
+    assert.equal(upgraded.candidates.find(item => item.cueIndex === 1)?.outdated, false);
+    service.start('vid', { scope: 'flagged', limit: 40 });
+    await service.settled('vid');
+    assert.equal(calls, 4, 'only the outdated window is re-run');
+    assert.equal(service.get('vid').outdated, 0);
+    // 同窗有一句已寫回（舊版）不算 outdated，但也不擋這一窗的其餘舊候選升版。
+    db.prepare("UPDATE subtitle_review_candidates SET version='subtitle-review-v1-discourse-window', decision='applied' WHERE cue_index=1").run();
+    assert.equal(service.get('vid').outdated, 0);
+    db.prepare('DELETE FROM subtitle_review_checkpoints').run();
+    service.start('vid', { scope: 'flagged', limit: 40 });
+    await service.settled('vid');
+    assert.equal(calls, 5, 'an applied v1 sentence does not block re-running its window');
+    assert.equal(service.get('vid').candidates.find(item => item.cueIndex === 1)?.decision, 'applied', 'same text keeps the applied decision');
   } finally { db.close(); }
 });

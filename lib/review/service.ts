@@ -86,9 +86,10 @@ export class SubtitleReviewService {
     // current／changed 一律以此刻的字幕重算：候選存的是產生當時的譯文，之後字幕可能被別的工作改過。
     const candidates = this.deps.store.candidates(row.id, prepared.sourceHash).map(item => {
       const current = prepared.segmentsZh[item.cueIndex]?.text ?? item.current;
-      return { ...item, current, changed: current === null || compact(item.candidate) !== compact(current) };
+      return { ...item, current, changed: current === null || compact(item.candidate) !== compact(current), outdated: item.version !== SUBTITLE_REVIEW_VERSION };
     });
     const drifted = candidates.filter(item => item.decision === 'applied' && item.changed).length;
+    const outdated = candidates.filter(item => item.outdated && item.decision !== 'applied').length;
     const flagged = new Set(prioritizeWindows(prepared.windows, FLAGGED_MIN_SCORE).map(window => window.key));
     return {
       status: run ? (stale && run.status !== 'running' ? 'partial' : run.status) : 'idle',
@@ -107,6 +108,7 @@ export class SubtitleReviewService {
       lastAppliedAt: run?.last_applied_at ?? null,
       exportError: run?.export_error ?? null,
       drifted,
+      outdated,
     };
   }
 
@@ -115,7 +117,9 @@ export class SubtitleReviewService {
     const row = this.loadRow(id);
     const prepared = this.prepare(row);
     const model = this.deps.model();
-    const existing = new Set(this.deps.store.candidates(row.id, prepared.sourceHash).map(item => item.windowKey));
+    // 舊版校訂邏輯產生的候選不算「已有候選」，升版後高風險視窗會自動重跑；同窗有一句已寫回不擋整窗
+    //（重跑時 saveCandidates 只在文字相同才保留 applied，已寫進字幕的內容不受影響）。
+    const existing = new Set(this.deps.store.candidates(row.id, prepared.sourceHash).filter(item => item.version === SUBTITLE_REVIEW_VERSION).map(item => item.windowKey));
     let selected: ReviewWindow[];
     if (options.scope === 'windows') {
       const keys = new Set(options.windowKeys ?? []);
@@ -139,7 +143,9 @@ export class SubtitleReviewService {
         save: (key, value) => { checkActive(); this.deps.store.saveCheckpoint(row.id, token, key, value); },
         progress: value => { checkActive(); this.deps.store.progress(row.id, token, value); },
         // 每窗成功就保存，後面的視窗失敗或取消都不丟掉已完成的候選。
-        onWindow: candidates => { checkActive(); this.deps.store.saveCandidates(row.id, token, prepared.sourceHash, model, candidates); },
+        onWindow: candidates => { checkActive(); this.deps.store.saveCandidates(row.id, token, prepared.sourceHash, model, candidates, SUBTITLE_REVIEW_VERSION); },
+        // 人工指定視窗重跑就是要新推論，不吃檢查點快取。
+        refresh: options.scope === 'windows',
       });
       checkActive();
       const changed = result.candidates.filter(item => item.changed).length;

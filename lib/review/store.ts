@@ -35,6 +35,7 @@ export function migrateSubtitleReviewStorage(db: Database.Database) {
   `);
   // 同一天內建過表的資料庫沒有這欄；SQLite 只能 ADD COLUMN，已存在會丟錯，吞掉即可。
   try { db.exec('ALTER TABLE subtitle_reviews ADD COLUMN export_error TEXT'); } catch { /* already exists */ }
+  try { db.exec('ALTER TABLE subtitle_review_candidates ADD COLUMN version TEXT'); } catch { /* already exists */ }
 }
 
 export interface ReviewRunRow {
@@ -43,7 +44,7 @@ export interface ReviewRunRow {
 }
 interface CandidateRow {
   cue_index: number; cue_id: string; window_key: string; start: number; end: number; source: string; current: string | null; candidate: string;
-  flags_json: string; notes_json: string; changed: number; decision: CandidateDecision;
+  flags_json: string; notes_json: string; changed: number; decision: CandidateDecision; version: string | null;
 }
 
 export const idleReviewProgress = (): ReviewProgress => ({ stage: 'idle', completed: 0, total: 0, message: '尚未啟動；閱讀此頁不會呼叫模型。' });
@@ -64,7 +65,7 @@ export class SubtitleReviewStore {
     const rows = this.db.prepare('SELECT * FROM subtitle_review_candidates WHERE summary_id=? AND source_hash=? ORDER BY cue_index').all(id, sourceHash) as CandidateRow[];
     return rows.map(row => ({
       cueIndex: row.cue_index, cueId: row.cue_id, windowKey: row.window_key, start: row.start, end: row.end, source: row.source, current: row.current,
-      candidate: row.candidate, flags: JSON.parse(row.flags_json), notes: JSON.parse(row.notes_json), changed: row.changed === 1, decision: row.decision,
+      candidate: row.candidate, flags: JSON.parse(row.flags_json), notes: JSON.parse(row.notes_json), changed: row.changed === 1, decision: row.decision, version: row.version ?? null,
     }));
   }
 
@@ -106,11 +107,11 @@ export class SubtitleReviewStore {
   }
 
   /** 新候選覆蓋同句舊候選，但已採用／已套用的決定不會被新一輪洗掉。 */
-  saveCandidates(id: string, token: string, sourceHash: string, model: string, candidates: ReviewCandidate[]) {
-    const insert = this.db.prepare(`INSERT INTO subtitle_review_candidates(summary_id,source_hash,cue_index,cue_id,window_key,start,end,source,current,candidate,flags_json,notes_json,changed,decision,model,created_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'candidate',?,?)
+  saveCandidates(id: string, token: string, sourceHash: string, model: string, candidates: ReviewCandidate[], version: string) {
+    const insert = this.db.prepare(`INSERT INTO subtitle_review_candidates(summary_id,source_hash,cue_index,cue_id,window_key,start,end,source,current,candidate,flags_json,notes_json,changed,decision,model,created_at,version)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'candidate',?,?,?)
       ON CONFLICT(summary_id,source_hash,cue_index) DO UPDATE SET candidate=excluded.candidate, current=excluded.current, flags_json=excluded.flags_json, notes_json=excluded.notes_json,
-        changed=excluded.changed, model=excluded.model, created_at=excluded.created_at,
+        changed=excluded.changed, model=excluded.model, created_at=excluded.created_at, version=excluded.version,
         decision=CASE WHEN subtitle_review_candidates.decision IN ('approved','applied') AND subtitle_review_candidates.candidate=excluded.candidate THEN subtitle_review_candidates.decision ELSE 'candidate' END,
         decided_at=CASE WHEN subtitle_review_candidates.decision IN ('approved','applied') AND subtitle_review_candidates.candidate=excluded.candidate THEN subtitle_review_candidates.decided_at ELSE NULL END`);
     this.db.transaction(() => {
@@ -118,7 +119,7 @@ export class SubtitleReviewStore {
       const now = Date.now();
       for (const item of candidates) {
         insert.run(id, sourceHash, item.cueIndex, item.cueId, item.windowKey, item.start, item.end, item.source, item.current, item.candidate,
-          JSON.stringify(item.flags), JSON.stringify(item.notes), item.changed ? 1 : 0, model, now);
+          JSON.stringify(item.flags), JSON.stringify(item.notes), item.changed ? 1 : 0, model, now, version);
       }
     })();
   }

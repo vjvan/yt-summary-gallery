@@ -5,7 +5,7 @@
  * 校訂以「一段完整話語」為單位重譯，輸出仍對回原本每一句的 id 與時間，
  * 結果只當候選，人工採用後才寫回字幕；原始譯文永遠留一份可還原。
  */
-export const SUBTITLE_REVIEW_VERSION = 'subtitle-review-v1-discourse-window';
+export const SUBTITLE_REVIEW_VERSION = 'subtitle-review-v2-sentence-anchor';
 
 export type RiskCode = 'negation' | 'magnitude' | 'quantity' | 'question' | 'foreground' | 'fragment' | 'comparison' | 'idiom' | 'pronoun';
 export interface RiskFlag { code: RiskCode; detail: string }
@@ -45,6 +45,9 @@ export interface ReviewCandidate {
   /** 候選的可疑之處（例如數字未逐字保留），人工採用前要看。 */
   notes: string[];
   decision: CandidateDecision;
+  /** 產生這句候選的校訂版本；舊版本的候選會被標成 outdated，重跑時不算「已有候選」。 */
+  version?: string | null;
+  outdated?: boolean;
 }
 
 export type ReviewStatus = 'idle' | 'running' | 'complete' | 'partial' | 'failed' | 'cancelled';
@@ -75,4 +78,6 @@ export interface ReviewResponse {
   exportError: string | null;
   /** 已寫回、但此刻字幕內容已不同（被別的工作覆蓋）的句數；可用 reapply 重新套用。 */
   drifted: number;
+  /** 來自舊版校訂邏輯的候選句數（例如 v1 比例切分）；重跑該窗就會更新。 */
+  outdated: number;
 }

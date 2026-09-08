@@ -116,7 +116,8 @@ export default function SubtitleReviewPanel({ id, onSeek, active = true, onChang
   if (!response) return <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-base leading-7 text-red-800">{loadError || error || "無法讀取語意校訂資料。"}</p>;
 
   const running = response.status === "running";
-  const covered = new Set(response.candidates.map(item => item.windowKey));
+  // 跟後端一樣：舊版校訂的候選不算已完成，除非那句已寫回。
+  const covered = new Set(response.candidates.filter(item => !item.outdated || item.decision === "applied").map(item => item.windowKey));
   const remainingFlagged = response.windows.filter(window => window.flagged && !covered.has(window.key)).length;
   const approvedChanged = response.candidates.filter(item => item.decision === "approved" && item.changed).length;
   const hashOK = !!response.sourceHash;
@@ -128,7 +129,7 @@ export default function SubtitleReviewPanel({ id, onSeek, active = true, onChang
         <p className="mt-2 text-base leading-7 text-stone-600">把一段完整話語連前後文一起重譯（本機模型，只依原文不看舊譯），結果只是候選：逐句採用後按「套用」才會寫回字幕，套用前的版本永遠可以還原。優先處理否定、量級、問句、前後景對不上的句子。</p>
         <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
           <div className="rounded-lg bg-stone-50 p-3"><dt className="text-stone-500">話語視窗</dt><dd className="text-2xl font-bold text-stone-900">{response.counts.windows}</dd><dd className="text-stone-600">高風險 {response.counts.flaggedWindows}，未校訂 {remainingFlagged}</dd></div>
-          <div className="rounded-lg bg-stone-50 p-3"><dt className="text-stone-500">候選句</dt><dd className="text-2xl font-bold text-stone-900">{response.counts.candidates}</dd><dd className="text-stone-600">與現行不同 {response.counts.changed}</dd></div>
+          <div className="rounded-lg bg-stone-50 p-3"><dt className="text-stone-500">候選句</dt><dd className="text-2xl font-bold text-stone-900">{response.counts.candidates}</dd><dd className="text-stone-600">與現行不同 {response.counts.changed}{response.model ? ` · 模型 ${response.model}` : ""}</dd></div>
           <div className="rounded-lg bg-stone-50 p-3"><dt className="text-stone-500">已採用</dt><dd className="text-2xl font-bold text-stone-900">{response.counts.approved}</dd><dd className="text-stone-600">已退回 {response.counts.rejected}</dd></div>
           <div className="rounded-lg bg-stone-50 p-3"><dt className="text-stone-500">已寫回字幕</dt><dd className="text-2xl font-bold text-stone-900">{response.counts.applied}</dd><dd className="text-stone-600">{response.lastAppliedAt ? `最近 ${localTime(response.lastAppliedAt)}` : "尚未套用"}</dd></div>
         </dl>
@@ -141,6 +142,9 @@ export default function SubtitleReviewPanel({ id, onSeek, active = true, onChang
             <span className="min-w-0 flex-1">{response.exportError}</span>
             <button type="button" onClick={() => send("PATCH", { action: "export" }, "export")} disabled={!!busy} className={`${small} border-red-300 bg-white text-red-800 hover:bg-red-100`}>{busy === "export" ? "匯出中…" : "重新匯出字幕檔"}</button>
           </div>
+        )}
+        {response.outdated > 0 && (
+          <p role="status" className="mt-2 rounded-lg bg-stone-100 p-3 text-sm leading-6 text-stone-700">有 {response.outdated} 句候選來自舊版校訂邏輯（句界可能偏一句），按該窗的「重新校訂本窗」或「校訂高風險視窗」會用新邏輯重譯。</p>
         )}
         {response.drifted > 0 && (
           <div role="alert" className="mt-2 flex flex-wrap items-center gap-3 rounded-lg bg-amber-50 p-3 text-sm leading-6 text-amber-900">
@@ -186,8 +190,12 @@ export default function SubtitleReviewPanel({ id, onSeek, active = true, onChang
                 {group.flags.map(flag => <span key={flag.code} title={flag.detail} className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-bold text-amber-900">{FLAG_LABEL[flag.code]}</span>)}
                 <span className="text-xs text-stone-500">風險 {group.score}</span>
               </div>
-              <button type="button" onClick={() => send("PATCH", { action: "approve", sourceHash: response.sourceHash, cueIndexes: pending }, `approve-${group.key}`)} disabled={!!busy || running || !hashOK || pending.length === 0}
-                className={`${small} border-stone-300 bg-white text-stone-800 hover:bg-stone-100`}>採用本窗 {pending.length} 句</button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button type="button" onClick={() => send("POST", { action: "start", scope: "windows", windowKeys: [group.key] }, `rerun-${group.key}`)} disabled={!!busy || running}
+                  title="用本機模型重譯這一窗，已採用但文字不同的句子會回到候選" className={`${small} border-stone-200 bg-white text-stone-600 hover:bg-stone-100`}>{busy === `rerun-${group.key}` ? "啟動中…" : "重新校訂本窗"}</button>
+                <button type="button" onClick={() => send("PATCH", { action: "approve", sourceHash: response.sourceHash, cueIndexes: pending }, `approve-${group.key}`)} disabled={!!busy || running || !hashOK || pending.length === 0}
+                  className={`${small} border-stone-300 bg-white text-stone-800 hover:bg-stone-100`}>採用本窗 {pending.length} 句</button>
+              </div>
             </header>
             <ul className="divide-y divide-stone-100">
               {group.items.map(item => (
@@ -195,7 +203,7 @@ export default function SubtitleReviewPanel({ id, onSeek, active = true, onChang
                   <div><p className="text-xs text-stone-500">原文 · <button type="button" onClick={() => onSeek(item.start)} className="font-mono hover:underline">{clock(item.start)}</button></p><p className="text-sm leading-6 text-stone-800">{item.source}</p></div>
                   <div><p className="text-xs text-stone-500">現行譯文</p><p className={`text-sm leading-6 ${item.changed ? "text-stone-500 line-through decoration-stone-300" : "text-stone-800"}`}>{item.current ?? "（尚未翻譯）"}</p></div>
                   <div>
-                    <p className="text-xs text-stone-500">候選譯文{item.decision === "applied" ? " · 已寫回" : item.decision === "approved" ? " · 已採用" : item.decision === "rejected" ? " · 已退回" : ""}</p>
+                    <p className="text-xs text-stone-500">候選譯文{item.decision === "applied" ? " · 已寫回" : item.decision === "approved" ? " · 已採用" : item.decision === "rejected" ? " · 已退回" : ""}{item.outdated && item.decision !== "applied" ? <span className="ml-1 rounded bg-stone-200 px-1 text-[11px] text-stone-700">舊版</span> : null}</p>
                     <p className={`text-sm leading-6 ${item.changed ? "font-medium text-stone-900" : "text-stone-500"}`}>{item.candidate}</p>
                     {item.notes.map(note => <p key={note} className="mt-1 text-xs leading-5 text-amber-800">{note}</p>)}
                   </div>

@@ -6,13 +6,20 @@ import type { WatchProcessingMode, WatchProviderInfo } from './types';
 export function processingMode(): WatchProcessingMode {
   return process.env.WATCH_PROCESSING_MODE?.trim().toLowerCase() === 'cloud' ? 'cloud' : 'local';
 }
-export function localTranslationModel(): string {
-  const model = process.env.WATCH_LOCAL_MODEL?.trim() || 'qwen2.5:7b';
+const validLocalModel = (model: string) => {
   // Only a local model name/tag, never a URL or an Ollama cloud-model alias.
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}(?::[a-zA-Z0-9][a-zA-Z0-9._-]{0,39})?$/.test(model) || /cloud/i.test(model)) {
     throw new WatchError('LOCAL_MODEL_INVALID', '本機翻譯模型名稱無效，請設定已安裝的本機模型，不可使用雲端模型或網址。', 503);
   }
   return model;
+};
+export function localTranslationModel(): string {
+  return validLocalModel(process.env.WATCH_LOCAL_MODEL?.trim() || 'qwen2.5:7b');
+}
+/** 語意校訂可以用比逐句翻譯更大的本機模型（一次一窗、量少），沒設就跟逐句翻譯同一個。 */
+export function subtitleReviewModel(): string {
+  const model = process.env.SUBTITLE_REVIEW_MODEL?.trim();
+  return model ? validLocalModel(model) : localTranslationModel();
 }
 /** Configuration only, not an online/loaded-model health probe. Never returns credentials. */
 export function watchProviderInfo(): WatchProviderInfo {
