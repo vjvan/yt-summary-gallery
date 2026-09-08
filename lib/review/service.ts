@@ -109,6 +109,7 @@ export class SubtitleReviewService {
       exportError: run?.export_error ?? null,
       drifted,
       outdated,
+      writerActive: !!this.deps.jobActive?.(row.id),
     };
   }
 

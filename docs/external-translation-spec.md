@@ -4,10 +4,10 @@
 
 ## 流程
 
-1. 匯出原稿：`node --import tsx scripts/translation-import.ts export <videoId>` 產生 `<videoId>.en.txt`，每行 `[n] [m:ss] 英文`。`n` 是句序（從 0 起），是對回影片庫唯一的鍵；時間戳只供人看。
+1. 匯出原稿：`node --import tsx scripts/translation-import.ts export <videoId>` 產生 `<videoId>.en.txt`（每行 `[n] [m:ss] 英文`）、`<videoId>.manifest.json`（來源指紋）與 `glossary.md`。`n` 是句序（從 0 起），是對回影片庫唯一的鍵；時間戳只供人看。**manifest 記下原文 hash 與句數，check／load 會核對**：匯出後換字幕軌或重新轉錄，這份譯文就不能套用，必須重新匯出再翻（確定原文沒變才用 `--no-manifest` 跳過）。
 2. 分批翻譯：照話語視窗切批（腳本 `export --batches 140` 會切好，每批帶前後各 3 句上下文），每批交給一個翻譯者。
 3. 驗證：`translation-import.ts check <videoId> <zh.txt>` 檢查句數、句序、空句、殘留英文、數字、保留詞、大陸用語、長度離群，錯誤要修到 0，警告逐條看。
-4. 載入：`translation-import.ts load <videoId> <zh.txt> --apply` 把譯文當成「語意校訂」的候選（全部標已採用）寫進影片庫並重寫 SRT／VTT；記在 `subtitle_revisions`，面板「還原上一批」可整批退回。不加 `--apply` 只載入候選不寫字幕，讓人先在「語意校訂」分頁看。
+4. 載入：`translation-import.ts load <videoId> <zh.txt> --apply` 把譯文當成「語意校訂」的候選（全部標已採用）寫進影片庫並重寫 SRT／VTT；記在 `subtitle_revisions`，面板「還原上一批」可整批退回。不加 `--apply` 只載入候選不寫字幕，讓人先在「語意校訂」分頁看。載入前會先問 3000（`--server` 可改）有沒有正在跑的字幕寫入或校訂工作，有就不載；整段寫入在同一個資料庫交易內完成，中途失敗不留半套。曾套用又被整片重譯覆蓋的句子會用 reapply 補回。
 
 ## 輸入格式
 
@@ -58,3 +58,9 @@
 | `>>` | 原文行首有 `>>` 而譯文沒有 | 自動補 |
 
 錯誤為 0 才能載入；警告要逐條人工看，看完可以直接載入。
+
+## 邊界
+
+- 解析有大小上限（單行 8000 字元、檔案 20 MB）；診斷訊息裡的不可信文字會跳脫，終端不會被控制碼操控。
+- 只有標籤或只有 `>>` 的行算空句（錯誤），不會靠自動補回的標籤混過去。
+- 撞寫防護目前是「載入前問服務端」加交易內 CAS。多個 Node process 同時寫同一支影片的字幕仍缺持久化版本號，這是已知 backlog。

@@ -10,6 +10,7 @@ import { withVideoTermbase } from './termbase';
 import type { WatchSessionView, WatchSource, WatchWindowResult, WatchLimits, WatchProviderInfo, WatchCue, WatchCueFailure, TranslatedCue } from './types';
 import { watchProviderInfo, watchProviderStatus } from './provider';
 import { hasOrdinaryReactVerb } from './protected-terms';
+import { libraryTranslations, type LibraryTranslations } from './library-lookup';
 
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 // Only local cache semantics change. Existing cloud window keys/cost units remain unchanged.
@@ -27,6 +28,8 @@ export const watchLimits = (): WatchLimits => watchProviderInfo().processingMode
 interface Session {
   source: WatchSource; glossary: Glossary; glossaryVersion: string; cachePrefix: string;
   calls: number; accessedAt: number; stopped: boolean; provider: WatchProviderInfo;
+  /** 影片庫已翻好的字幕；有就優先用，命中句回寫快取，不跑模型。 */
+  library: LibraryTranslations | null;
   job?: { windowKey: string; controller: AbortController; promise: Promise<WatchWindowResult> };
 }
 interface Dependencies {
@@ -38,6 +41,8 @@ interface Dependencies {
   limits: () => WatchLimits;
   provider?: () => WatchProviderInfo;
   status?: (signal?: AbortSignal) => Promise<WatchProviderInfo>;
+  /** 影片庫查詢；沒給就不查（測試或純即時模式）。 */
+  library?: (videoId: string) => LibraryTranslations | null;
 }
 
 /** Request-driven bounded worker: current position first; never starts summary/cards/audio. */
@@ -76,19 +81,36 @@ export class WatchService {
     const glossary = withVideoTermbase(structuredClone(this.deps.glossary()));
     const glossaryVersion = hash(glossary);
     const sessionId = randomUUID();
+    const library = this.deps.library?.(source.videoId) ?? null;
     const session: Session = {
-      source, glossary, glossaryVersion, provider,
+      source, glossary, glossaryVersion, provider, library,
       cachePrefix: hash({ video: source.videoId, track: source.trackId, source: source.cues, target: 'zh-TW', glossaryVersion,
         provider: provider.processingMode, model: provider.translationModel, version: TRANSLATION_VERSION,
         ...(provider.processingMode === 'local' ? { cueCacheSchema: LOCAL_CUE_CACHE_SCHEMA } : {}) }),
       calls: 0, accessedAt: Date.now(), stopped: false,
     };
     this.sessions.set(sessionId, session);
+    // 本機模式：影片庫是真相，先查庫（語意校訂或外部翻譯套用過的句子比舊快取好），命中就覆寫逐句快取；
+    // 庫裡沒有的才看快取。整片都在庫裡時，擴充一句模型都不會叫。
     const cachedCues = provider.processingMode === 'local'
-      ? source.cues.flatMap(cue => { const cached = this.deps.store.getCue(cueKey(session.cachePrefix, cue, session.glossary), cue); return cached ? [cached] : []; })
+      ? source.cues.flatMap(cue => { const cached = this.fromLibrary(session, cue) ?? this.deps.store.getCue(cueKey(session.cachePrefix, cue, session.glossary), cue); return cached ? [cached] : []; })
       : undefined;
     return { ...source, ...provider, sessionId, glossaryVersion, translationEnabled: this.deps.enabled() && provider.translationConfigured && (provider.translationReady ?? true), limits: this.limits(provider),
       ...(cachedCues ? { cachedCues } : {}) };
+  }
+
+  /** 影片庫命中就寫進逐句快取（同一把鍵），下次直接命中快取；寫入失敗不影響回傳。 */
+  private fromLibrary(session: Session, cue: WatchCue): TranslatedCue | undefined {
+    const hit = session.library?.find(cue);
+    if (!hit || !translationMatchesSource(hit, cue)) return undefined;
+    // 最低品質守門：原文是英文句子時譯文要有中文（舊管線失敗會把英文原樣留著）；react 當普通動詞時不能原樣留成品牌名。
+    const letters = (cue.text.match(/[A-Za-z]/g) ?? []).length;
+    if (letters >= 3 && !/[㐀-鿿]/.test(hit.text)) return undefined;
+    if (hasOrdinaryReactVerb(cue, session.glossary) && /\bReact\b/.test(hit.text)) return undefined;
+    if (session.provider.processingMode === 'local') {
+      try { this.deps.store.putCue(cueKey(session.cachePrefix, cue, session.glossary), cue, hit); } catch { /* 快取寫不進去仍可顯示 */ }
+    }
+    return hit;
   }
 
   private session(id: string) {
@@ -113,7 +135,11 @@ export class WatchService {
     // An affected old complete window must not bypass the corrected per-cue key.
     // All other cue/window keys, including every cloud key, remain unchanged.
     const key = `${session.cachePrefix}:${windowKey}${local && targets.some(cue => hasOrdinaryReactVerb(cue, session.glossary)) ? ':react-verb-v1' : ''}`;
-    const cached = local ? this.deps.store.getMatching(key, targets) : this.deps.store.get(key);
+    // 影片庫優先於整窗快取：這支影片先前預譯過的舊快取不能蓋掉之後套用的校訂或外部譯文。
+    const libraryHits = session.library ? targets.map(cue => this.fromLibrary(session, cue)) : [];
+    const libraryComplete = targets.length > 0 && libraryHits.length === targets.length && libraryHits.every(Boolean);
+    // 本機模式部分命中就走逐句路徑（庫內句優先、其餘看逐句快取）；雲端模式整窗快取照舊，不然部分命中的窗每次重讀都再付一次費。
+    const cached = local ? (libraryHits.some(Boolean) ? undefined : this.deps.store.getMatching(key, targets)) : this.deps.store.get(key);
     const result = (cues: WatchWindowResult['cues'], cache: boolean, failedCues: WatchCueFailure[] = []): WatchWindowResult => ({
       sessionId: id, windowKey, cues, cached: failedCues.length ? false : cache,
       callsUsed: session.calls, dailyCallsUsed: this.deps.store.used(provider.processingMode),
@@ -121,17 +147,27 @@ export class WatchService {
     });
     // Supersede only other windows. A ready cache hit still cancels stale work.
     if (session.job && session.job.windowKey !== windowKey) session.job.controller.abort();
+    if (libraryComplete) {
+      const cues = libraryHits as TranslatedCue[];
+      this.deps.store.put(key, cues);
+      return result(cues, true);
+    }
     if (cached || !targets.length) return result(cached || [], true);
     if (session.job?.windowKey === windowKey && !session.job.controller.signal.aborted) return session.job.promise;
     const savedCues = new Map<string, TranslatedCue>();
     if (local) {
-      for (const cue of targets) {
-        const saved = this.deps.store.getCue(cueKey(session.cachePrefix, cue, session.glossary), cue);
+      targets.forEach((cue, position) => {
+        const saved = libraryHits[position] ?? this.deps.store.getCue(cueKey(session.cachePrefix, cue, session.glossary), cue);
         if (saved) savedCues.set(cue.id, saved);
+      });
+      // Reconstruct complete windows from the library plus validated cue cache without reserving work.
+      if (savedCues.size === targets.length) {
+        const cues = targets.map(cue => savedCues.get(cue.id)!);
+        if (libraryHits.some(Boolean)) this.deps.store.put(key, cues);
+        return result(cues, true);
       }
-      // Reconstruct complete windows from validated cue cache without reserving work.
-      if (savedCues.size === targets.length) return result(targets.map(cue => savedCues.get(cue.id)!), true);
     }
+    // 雲端模式只認整窗：整窗都在庫裡才用（上面已回傳），缺一句就照常送雲端。
     if (session.provider.translationReady === false) throw new WatchError(provider.processingMode === 'local' ? 'LOCAL_MODEL_UNAVAILABLE' : 'MODEL_NOT_CONFIGURED', session.provider.translationStatusMessage || '翻譯服務尚未就緒，請啟動服務後重新載入影片。', 503);
     if (!this.deps.enabled() || !provider.translationConfigured) throw new WatchError('MODEL_NOT_CONFIGURED', '尚未設定所選的後端翻譯服務；目前可觀看原文字幕。', 503);
     const limits = this.limits(provider);
@@ -212,5 +248,5 @@ export class WatchService {
 // sessions intentionally expire on process restart and can be safely recreated.
 const runtime = globalThis as typeof globalThis & { __ytWatchService?: WatchService };
 export function watchService() {
-  return runtime.__ytWatchService ??= new WatchService({ store: new WatchStore(), source: fetchWatchSource, translate: translateWatchWindow, glossary: getGlossary, enabled: () => watchProviderInfo().translationConfigured, limits: watchLimits, provider: watchProviderInfo, status: watchProviderStatus });
+  return runtime.__ytWatchService ??= new WatchService({ store: new WatchStore(), source: fetchWatchSource, translate: translateWatchWindow, glossary: getGlossary, enabled: () => watchProviderInfo().translationConfigured, limits: watchLimits, provider: watchProviderInfo, status: watchProviderStatus, library: libraryTranslations });
 }

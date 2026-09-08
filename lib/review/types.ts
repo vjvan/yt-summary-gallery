@@ -80,4 +80,6 @@ export interface ReviewResponse {
   drifted: number;
   /** 來自舊版校訂邏輯的候選句數（例如 v1 比例切分）；重跑該窗就會更新。 */
   outdated: number;
+  /** 這個 process 有沒有字幕寫入工作正在跑（重新翻譯、字幕續作、影片庫渲染）；外部匯入工具用它擋撞寫。 */
+  writerActive: boolean;
 }
