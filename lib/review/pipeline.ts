@@ -163,6 +163,7 @@ const CJK_DIGITS = '零一二三四五六七八九';
 /** 0 到 9999 的中文數字；二千／二百也給「兩」的寫法。 */
 export function chineseNumerals(value: number): string[] {
   if (!Number.isInteger(value) || value < 0 || value > 9999) return [];
+  if (value === 2) return ['二', '兩'];
   if (value < 10) return [CJK_DIGITS[value]];
   const units = ['', '十', '百', '千'];
   const digits = String(value);
@@ -188,9 +189,20 @@ const withUnit = (value: number, unit: string, limit: number): string[] => {
   if (!Number.isFinite(scaled) || scaled <= 0 || Math.round(scaled * 100) / 100 !== scaled) return [];
   return [`${plain(scaled)}${unit}`, ...chineseNumerals(scaled).map(text => `${text}${unit}`)];
 };
-const unitForms = (value: number) => value >= 1000 ? ([['千', 1e3], ['萬', 1e4], ['億', 1e8]] as const).flatMap(([unit, limit]) => withUnit(value, unit, limit)) : [];
+const unitForms = (value: number) => {
+  if (value < 1000) return [];
+  const forms = ([['千', 1e3], ['萬', 1e4], ['億', 1e8]] as const).flatMap(([unit, limit]) => withUnit(value, unit, limit));
+  // 口語的「1 萬 4」「2 萬 5」：萬後面直接接千位數字。
+  if (value >= 10000 && value < 1e8 && value % 1000 === 0 && (value % 10000) !== 0) {
+    const wan = Math.floor(value / 10000), qian = (value % 10000) / 1000;
+    forms.push(`${wan}萬${qian}`, `${wan}萬${qian}千`, ...chineseNumerals(wan).flatMap(a => chineseNumerals(qian).flatMap(b => [`${a}萬${b}`, `${a}萬${b}千`])));
+  }
+  return forms;
+};
 
-export interface NumberMention { raw: string; forms: string[] }
+export interface NumberMention { raw: string; forms: string[]; position?: number }
+/** 「350 to 600k」「2 to 5 grand」這種範圍，前面那個數字跟後面共用量級。 */
+const RANGE_SUFFIX = /(\d+(?:[.,]\d+)*)\s*(?:to|-|–|—|and|or)\s*\d+(?:[.,]\d+)*\s*(k|m|b|grand|thousand|million|billion)\b/gi;
 /**
  * 原文裡每個數字的可接受寫法。有量級（10K、80 grand、5 million）時只接受乘過量級的等值寫法，不接受裸係數
  * （「八十元」不是 80 grand）；百分比只接受帶 % 或「百分之」的寫法（「50 倍」不是 50%）。
@@ -206,6 +218,7 @@ export function numberMentions(text: string): NumberMention[] {
     if (match[2]) {
       forms.add(`${match[1]}%`); forms.add(`${digits}%`); forms.add(`百分之${digits}`);
       chineseNumerals(value).forEach(item => forms.add(`百分之${item}`));
+      if (value === 100) forms.add('百分之百');
     } else if (suffix) {
       const scaled = value * SCALE[suffix];
       if (Number.isInteger(scaled)) forms.add(String(scaled));
@@ -220,7 +233,17 @@ export function numberMentions(text: string): NumberMention[] {
       // 3.5 與 3.50 是同一個數；小數只比值不比寫法。
       else for (const fixed of [1, 2, 3]) forms.add(value.toFixed(fixed));
     }
-    out.push({ raw: match[0].trim(), forms: [...forms] });
+    out.push({ raw: match[0].trim(), forms: [...forms], position: match.index });
+  }
+  for (const range of text.matchAll(RANGE_SUFFIX)) {
+    const mention = out.find(item => item.position === range.index);
+    if (!mention) continue;
+    const scaled = Number(range[1].replace(/,/g, '')) * SCALE[range[2].toLowerCase()];
+    const extra = new Set(mention.forms);
+    if (Number.isInteger(scaled)) extra.add(String(scaled));
+    unitForms(scaled).forEach(item => extra.add(item));
+    chineseNumerals(scaled).forEach(item => extra.add(item));
+    mention.forms = [...extra];
   }
   return out;
 }

@@ -130,9 +130,17 @@ test('number guard accepts scaled, comma and Chinese forms and only reports numb
   assert.deepEqual(missingNumbers('£5,000 to make a video', '花 5,000 英鎊做一支影片'), []);
   assert.deepEqual(missingNumbers('about 2.5k a night', '一晚大概 2500'), []);
   assert.deepEqual(missingNumbers('grew 50% this year', '今年成長了百分之五十'), []);
+  assert.deepEqual(missingNumbers('Yes, 100%.', '對啊，百分之百。'), []);
   assert.deepEqual(missingNumbers('making like 80 grand off of me', '靠我賺了八十萬'), ['80 grand'], '八十萬 is 800000, not 80000');
   assert.deepEqual(missingNumbers('we have 12 full-time employees', '我們有全職員工'), ['12']);
   assert.deepEqual(missingNumbers('in 10 minutes', '十分鐘內'), [], 'minutes is not a magnitude suffix');
+  assert.deepEqual(missingNumbers('between 350 to 600k a month', '一個月 35 萬到 60 萬'), [], 'a range shares the trailing magnitude');
+  assert.deepEqual(missingNumbers('2 to 5 grand a night', '一晚 2 到 5 千'), []);
+  assert.deepEqual(missingNumbers('gave me 14 grand', '給了我 1 萬 4'), [], 'spoken 1萬4 is 14000');
+  assert.deepEqual(missingNumbers('consulting for 15 grand', '1 萬 5 千美金的顧問案'), []);
+  assert.deepEqual(missingNumbers('for 2 months', '痛恨了兩個月'), [], '兩 is 2');
+  assert.deepEqual(chineseNumerals(2), ['二', '兩']);
+  assert.deepEqual(missingNumbers('between 350 to 600k a month', '一個月 3 萬 5 到 60 萬'), ['350']);
   // 同一句裡 5k 與 £5,000 各要有自己的數字：譯文只有一個「五千」代表 £5,000 被翻成了五萬（2026-09-08 7B 實測輸出）。
   assert.deepEqual(missingNumbers('he was like 5k and I was like, what do you mean £5,000 to make a video?', '他說要五千英鎊，我當時想，拍個影片要五萬英鎊？'), ['5,000']);
   assert.deepEqual(missingNumbers('he was like 5k and I was like, what do you mean £5,000 to make a video?', '他說要五千英鎊，我當時想，拍個影片要五千英鎊？'), []);
