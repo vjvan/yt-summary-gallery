@@ -3,6 +3,7 @@ import { getDb } from "@/lib/db";
 import { fetchTranscript } from "@/lib/pipeline/fetch-transcript";
 import { fetchPodcast } from "@/lib/pipeline/fetch-podcast";
 import { fetchVideoFromUrl } from "@/lib/pipeline/fetch-video-url";
+import { loadCaptions, pickCaptionTrack, probeMedia } from "@/lib/pipeline/media-captions";
 import { detectSource, extractId } from "@/lib/pipeline/detect-source";
 import { extractSummaryVerified } from "@/lib/pipeline/extract-summary";
 import { renderCard } from "@/lib/pipeline/render-card";
@@ -93,6 +94,27 @@ export async function POST(req: NextRequest) {
 async function runVideoUrlPipeline(id: string, url: string, contentId: string) {
   const db = getDb();
   const projectRoot = process.cwd();
+  const tmpDir = path.join(projectRoot, "data", "tmp", contentId);
+
+  // 先問這支影片有沒有自帶字幕(X/Vimeo/Bilibili 很多都有)。有就只抓那個字幕檔,
+  // 整支影片不下載也不聽打:實測一支 56 分鐘的 X podcast 因此從 4.3 GB 加十幾分鐘聽打,變成幾百 KB 加零推論。
+  // 探測失敗(私人影片、需要登入、站點改版)就照舊走下載加 Whisper。
+  const probe = await probeMedia(url).catch(() => null);
+  const track = probe ? pickCaptionTrack(probe) : null;
+  const captions = probe && track ? await loadCaptions(url, track, contentId, tmpDir).catch(() => null) : null;
+
+  if (probe && captions) {
+    const durationDisplay = probe.duration ? `${Math.floor(probe.duration / 60)}:${String(Math.floor(probe.duration % 60)).padStart(2, "0")}` : "";
+    // 沒有本機影片檔:標成非影片項目,播放器不會指向不存在的檔案,燒字幕也不會被提供。
+    db.prepare(
+      "UPDATE summaries SET is_video = 0, video_url = NULL, title = ?, channel = ?, thumbnail_url = ?, duration = ?, duration_display = ? WHERE id = ?"
+    ).run(probe.title, probe.channel, probe.thumbnailUrl, probe.duration, durationDisplay, id);
+    await runVideoPipeline({
+      id, contentId, videoPath: null, tmpDir, captions,
+      title: probe.title, channel: probe.channel, duration: probe.duration, thumbnailUrl: probe.thumbnailUrl,
+    });
+    return;
+  }
 
   const meta = await fetchVideoFromUrl(url, contentId, projectRoot);
 

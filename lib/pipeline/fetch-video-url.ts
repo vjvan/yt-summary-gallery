@@ -37,6 +37,8 @@ export async function fetchVideoFromUrl(url: string, contentId: string, projectR
   const tmpDir = path.join(projectRoot, "data", "tmp", contentId);
   fs.mkdirSync(tmpDir, { recursive: true });
 
+  // -S "res:720" : 偏好 720p 以下。目的是字幕與摘要,不是收藏影片檔;
+  //   實測一支 56 分鐘的 X 影片,1080p 要 4.3 GB、720p 913 MB。
   // -f best[ext=mp4]/best : 偏好 mp4
   // --no-playlist : 防止某些 URL 拉整個 playlist
   // --write-info-json : 拿 metadata
@@ -46,7 +48,7 @@ export async function fetchVideoFromUrl(url: string, contentId: string, projectR
 
   try {
     await run(
-      `"${ytdlp}" -f "best[ext=mp4]/best" --no-playlist --write-info-json ` +
+      `"${ytdlp}" -f "best[ext=mp4]/best" -S "res:720" --no-playlist --write-info-json ` +
         `--merge-output-format mp4 --no-warnings ` +
         `-o "${outputTemplate}" "${url}"`,
       { timeoutMs: 600000 }

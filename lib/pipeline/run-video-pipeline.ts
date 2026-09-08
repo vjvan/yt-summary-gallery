@@ -16,11 +16,16 @@ import { transcribeAudio, probeDuration } from "@/lib/pipeline/transcribe";
 export interface VideoPipelineInput {
   id: string;             // summaries.id (uuid)
   contentId: string;      // 12-char content hash,用作目錄/檔名
-  videoPath: string;      // 本機影片檔絕對路徑
+  /** 本機影片檔絕對路徑；走網站自帶字幕時沒有影片檔,傳 null。 */
+  videoPath: string | null;
   title: string;
   channel?: string;
   duration?: number;
   thumbnailUrl?: string;
+  /** 網站自帶的字幕(見 lib/pipeline/media-captions.ts);有就不抽音軌、不跑 Whisper。 */
+  captions?: { transcript: string; segments: { start: number; end: number; text: string }[]; source: string } | null;
+  /** 沒有影片檔時的工作目錄。 */
+  tmpDir?: string;
 }
 
 function pad(n: number) { return n.toString().padStart(2, "0"); }
@@ -30,24 +35,37 @@ export async function runVideoPipeline(input: VideoPipelineInput): Promise<void>
   const { id, contentId, videoPath, title } = input;
 
   const projectRoot = process.cwd();
-  const tmpDir = path.dirname(videoPath);
+  const tmpDir = videoPath ? path.dirname(videoPath) : (input.tmpDir || path.join(projectRoot, "data", "tmp", contentId));
   const cardDir = path.join(projectRoot, "public", "cards", contentId);
 
-  // Step 1: 影片抽純音軌 mp3 給 Whisper(64k 16kHz mono,大幅縮小)
-  const audioForWhisper = path.join(tmpDir, `${contentId}.audio.mp3`);
-  await extractAudioFromVideo(videoPath, audioForWhisper);
+  // 網站自帶字幕就用它,省下整支影片的下載與聽打;沒有才抽音軌跑 Whisper。
+  let transcript: string;
+  let segments: { start: number; end: number; text: string }[];
+  let transcriptSource: string;
+  let duration: number;
+  if (input.captions) {
+    ({ transcript, segments } = input.captions);
+    transcriptSource = input.captions.source;
+    duration = input.duration || segments[segments.length - 1]?.end || 0;
+  } else {
+    if (!videoPath) throw new Error("沒有影片檔也沒有字幕,無法轉錄。");
+    // Step 1: 影片抽純音軌 mp3 給 Whisper(64k 16kHz mono,大幅縮小)
+    const audioForWhisper = path.join(tmpDir, `${contentId}.audio.mp3`);
+    await extractAudioFromVideo(videoPath, audioForWhisper);
 
-  // Step 2: 取 duration(從原始 video,比 audio 更可靠)
-  const duration = input.duration || (await probeDuration(videoPath));
+    // Step 2: 取 duration(從原始 video,比 audio 更可靠)
+    duration = input.duration || (await probeDuration(videoPath));
+
+    // Step 3: Whisper transcription(壓縮 / 25MB 切段都在 transcribeAudio 內處理)
+    ({ text: transcript, segments } = await transcribeAudio(audioForWhisper, { tmpDir }));
+    transcriptSource = "whisper";
+  }
   const durationDisplay = `${Math.floor(duration / 60)}:${pad(Math.floor(duration % 60))}`;
-
-  // Step 3: Whisper transcription(壓縮 / 25MB 切段都在 transcribeAudio 內處理)
-  const { text: transcript, segments } = await transcribeAudio(audioForWhisper, { tmpDir });
 
   // checkpoint: 轉錄完成(最貴的一步),重啟後可從這裡續跑,不重花 Whisper 錢
   db.prepare(
     `UPDATE summaries SET title = ?, channel = ?, duration = ?, duration_display = ?,
-     thumbnail_url = ?, transcript_source = 'whisper', transcript = ?, segments = ?,
+     thumbnail_url = ?, transcript_source = ?, transcript = ?, segments = ?,
      pipeline_stage = 'transcribed' WHERE id = ?`
   ).run(
     title,
@@ -55,6 +73,7 @@ export async function runVideoPipeline(input: VideoPipelineInput): Promise<void>
     duration,
     durationDisplay,
     input.thumbnailUrl || "",
+    transcriptSource,
     transcript,
     JSON.stringify(segments),
     id
@@ -112,7 +131,7 @@ export async function runVideoPipeline(input: VideoPipelineInput): Promise<void>
     upload_date: "",
     thumbnail_url: input.thumbnailUrl || "",
     view_count: 0,
-    transcript_source: "whisper" as const,
+    transcript_source: transcriptSource as "whisper",
   };
 
   const slidePaths = await renderCard(summary, metadata, cardDir);
