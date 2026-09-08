@@ -24,17 +24,14 @@ export async function POST(
 
   if (!row) return NextResponse.json({ error: "Not found" }, { status: 404 });
   if (!row.segments) return NextResponse.json({ error: "No segments to retranslate" }, { status: 400 });
-  // 影片本身的管線還在跑（轉錄／翻譯／字幕續作）時，它結束時會整份重寫中譯，不要再開第二個寫入者。
-  if (row.status === "processing" || (row as { subtitle_status?: string | null }).subtitle_status === "processing") {
-    return NextResponse.json({ error: "這支影片的字幕工作還在進行，請等它結束再重新翻譯。" }, { status: 409 });
-  }
 
   const segments = JSON.parse(row.segments) as TranscriptSegment[];
 
   // 取得「整份重寫中譯」的寫入權（資料庫 claim，跨 process）：語意校訂與外部譯文匯入在這段期間
   // 會拒絕套用／還原，避免人工修改被整片覆蓋；拿不到代表別的工作正在寫。
-  const claim = claimSubtitleWrite(row.id, db);
-  if (!claim) return NextResponse.json({ error: "這支影片的字幕正在被其他工作重寫，請等它結束再重新翻譯。" }, { status: 409 });
+  // 取得寫入權與「影片沒有其他管線在跑」是同一個原子操作：檢查完才被插入的競態在這裡就沒有了。
+  const claim = claimSubtitleWrite(row.id, db, Date.now(), { requireIdle: true });
+  if (!claim) return NextResponse.json({ error: "這支影片的字幕工作還在進行，或正被其他工作重寫，請等它結束再重新翻譯。" }, { status: 409 });
   // Async,client 立刻拿 202,前端 polling
   (async () => {
     try {
@@ -43,13 +40,14 @@ export async function POST(
 
       // 翻譯期間 claim 可能已到期被別人接管（電腦休眠、跑超過一小時）；接管者的成果不可以被舊持有人蓋掉。
       const written = getDb().prepare(
-        `UPDATE summaries SET transcript_zh = ?, segments_zh = ?, is_translated = ? WHERE id = ? AND subtitle_write_token = ?`
+        `UPDATE summaries SET transcript_zh = ?, segments_zh = ?, is_translated = ? WHERE id = ? AND subtitle_write_token = ? AND subtitle_write_until > ?`
       ).run(
         transcriptZh,
         wasTranslated ? JSON.stringify(segmentsZh) : null,
         wasTranslated ? 1 : 0,
         row.id,
-        claim.token
+        claim.token,
+        Date.now()
       );
       if (written.changes !== 1) return; // 寫入權已易主，連字幕檔也不重寫
 

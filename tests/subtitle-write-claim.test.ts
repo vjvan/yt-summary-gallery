@@ -6,8 +6,8 @@ import { claimSubtitleWrite, subtitleWriteActive, SUBTITLE_CLAIM_TTL_MS } from '
 // 整片重譯會讀出原文、跑幾分鐘模型、最後無條件覆寫中譯；claim 讓匯入與校訂在那段期間拒絕寫入。
 function fixture() {
   const db = new Database(':memory:');
-  db.exec('CREATE TABLE summaries (id TEXT PRIMARY KEY, video_id TEXT)');
-  db.prepare('INSERT INTO summaries VALUES (?,?)').run('sum', 'vid');
+  db.exec('CREATE TABLE summaries (id TEXT PRIMARY KEY, video_id TEXT, status TEXT, subtitle_status TEXT)');
+  db.prepare('INSERT INTO summaries VALUES (?,?,?,?)').run('sum', 'vid', 'done', 'complete');
   return db;
 }
 
@@ -48,4 +48,23 @@ test('an expired claim taken over by someone else makes the old holder stop befo
   assert.equal(taker.held(), true);
   slow.release();
   assert.equal(taker.held(), true, 'the old holder releasing does not free the new claim');
+});
+
+test('an expired claim stops holding even before anyone takes it over, and requireIdle refuses a busy video', () => {
+  const db = fixture();
+  const slow = claimSubtitleWrite('sum', db)!;
+  db.prepare('UPDATE summaries SET subtitle_write_until=? WHERE id=?').run(Date.now() - 1000, 'sum');
+  assert.equal(slow.held(), false, 'an expired lease is not held, even with nobody else claiming');
+  assert.equal(subtitleWriteActive('sum', db), true, 'the local process still counts as writing');
+  slow.release();
+  // requireIdle：影片本身的管線還在跑時不給寫入權，而且檢查與取得是同一個操作。
+  db.prepare("UPDATE summaries SET status='processing' WHERE id=?").run('sum');
+  assert.equal(claimSubtitleWrite('sum', db, Date.now(), { requireIdle: true }), null, 'a processing video cannot be claimed');
+  const anyway = claimSubtitleWrite('sum', db);
+  assert.ok(anyway, 'without requireIdle the claim still works');
+  anyway.release();
+  db.prepare("UPDATE summaries SET status='done', subtitle_status='processing', subtitle_write_token=NULL, subtitle_write_until=NULL WHERE id=?").run('sum');
+  assert.equal(claimSubtitleWrite('sum', db, Date.now(), { requireIdle: true }), null, 'a running subtitle job also blocks it');
+  db.prepare("UPDATE summaries SET subtitle_status='complete' WHERE id=?").run('sum');
+  assert.ok(claimSubtitleWrite('sum', db, Date.now(), { requireIdle: true }), 'an idle video can be claimed');
 });

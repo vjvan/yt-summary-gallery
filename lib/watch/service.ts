@@ -3,7 +3,7 @@ import { getGlossary } from '../glossary-store';
 import type { Glossary } from '../glossary-defaults';
 import { fetchWatchSource, canonicalYouTubeUrl } from './source';
 import { selectWindow } from './cues';
-import { TRANSLATION_VERSION, translateWatchWindow } from './translator';
+import { TRANSLATION_VERSION, languageNeutralSource, translateWatchWindow } from './translator';
 import { WatchStore, translationMatchesSource } from './store';
 import { WatchError, LOCAL_QUALITY_REASONS, safeLocalQualityReason } from './errors';
 import { withVideoTermbase } from './termbase';
@@ -107,7 +107,8 @@ export class WatchService {
    */
   private usable(session: Session, cue: WatchCue, candidate: TranslatedCue): boolean {
     const letters = (cue.text.match(/[A-Za-z]/g) ?? []).length;
-    return letters < 3 || /[㐀-鿿]/.test(candidate.text) || protectedNamesOnlyText(cue, session.glossary) !== null;
+    return letters < 3 || /[㐀-鿿]/.test(candidate.text)
+      || languageNeutralSource(cue.text, session.glossary) || protectedNamesOnlyText(cue, session.glossary) !== null;
   }
 
   /**

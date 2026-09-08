@@ -199,3 +199,26 @@ test('a cue the library got wrong is translated once, and the good result is the
   assert.equal(second.cached, true);
   assert.deepEqual(second.cues.map(cue => cue.text), first.cues.map(cue => cue.text));
 });
+
+test('an all-caps abbreviation is a legitimate no-Chinese translation, not a failed one', async () => {
+  const abbreviations: WatchCue[] = [{ id: 'cue-0', start: 0, end: 4, text: 'CPU' }, { id: 'cue-1', start: 4, end: 8, text: 'It has the potential to change everything.' }];
+  const db = new Database(':memory:');
+  db.exec('CREATE TABLE summaries (id TEXT PRIMARY KEY, video_id TEXT, is_translated INTEGER, segments TEXT, segments_zh TEXT)');
+  db.prepare('INSERT INTO summaries VALUES (?,?,?,?,?)').run('sum', videoId, 1,
+    JSON.stringify(abbreviations.map(cue => ({ start: cue.start, end: cue.end, text: cue.text }))),
+    JSON.stringify([{ start: 0, end: 4, text: 'CPU' }, { start: 4, end: 8, text: '它有潛力改變一切。' }]));
+  const store = new WatchStore(':memory:');
+  let calls = 0;
+  const service = new WatchService({
+    store, provider: () => ({ processingMode: 'local', unlimited: true, translationModel: 'mock', translationConfigured: true, audioConfigured: false }),
+    source: async () => ({ videoId, title: 'fixture', language: 'en', sourceKind: 'manual', trackId: 'fixture', cues: abbreviations }),
+    translate: async ({ targets }) => { calls++; return targets.map(cue => ({ ...cue, originalText: cue.text, text: '模型' })); },
+    glossary: () => ({ no_translate_terms: [], term_map: [], style_rules: [] }), enabled: () => true, limits: () => ({ sessionCalls: 25, dailyCalls: 100 }),
+    library: () => libraryTranslationsFrom(db, videoId),
+  });
+  const created = await service.start(`https://www.youtube.com/watch?v=${videoId}`);
+  assert.deepEqual(created.cachedCues?.map(cue => cue.text), ['CPU', '它有潛力改變一切。'], 'CPU → CPU is a hit, not a failure');
+  const window = await service.window(created.sessionId, 0, true);
+  assert.equal(calls, 0, 'nothing needs the model');
+  assert.equal(window.cached, true);
+});

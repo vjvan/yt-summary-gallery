@@ -27,19 +27,26 @@ export interface SubtitleWriteClaim {
   release(): void;
 }
 
-/** 原子取得寫入權；別人佔用中就回 null。 */
-export function claimSubtitleWrite(summaryId: string, db: Database.Database = getDb(), now = Date.now()): SubtitleWriteClaim | null {
+export interface ClaimOptions {
+  /** 一併要求影片沒有其他管線在跑（轉錄／翻譯／字幕續作）；檢查與取得寫入權是同一個原子操作。 */
+  requireIdle?: boolean;
+}
+
+/** 原子取得寫入權；別人佔用中（或 requireIdle 時影片還在跑）就回 null。 */
+export function claimSubtitleWrite(summaryId: string, db: Database.Database = getDb(), now = Date.now(), options: ClaimOptions = {}): SubtitleWriteClaim | null {
   claimColumns(db);
   const token = `w-${now.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  const idle = options.requireIdle ? " AND status IS NOT 'processing' AND (subtitle_status IS NULL OR subtitle_status IS NOT 'processing')" : '';
   const claimed = db.prepare(`UPDATE summaries SET subtitle_write_token=?, subtitle_write_until=?
-    WHERE id=? AND (subtitle_write_token IS NULL OR subtitle_write_until IS NULL OR subtitle_write_until < ?)`)
+    WHERE id=? AND (subtitle_write_token IS NULL OR subtitle_write_until IS NULL OR subtitle_write_until < ?)${idle}`)
     .run(token, now + SUBTITLE_CLAIM_TTL_MS, summaryId, now);
   if (claimed.changes !== 1) return null;
   const endLocal = beginSubtitleWrite(summaryId);
   let released = false;
   return {
     token,
-    held: () => !released && !!db.prepare('SELECT 1 AS ok FROM summaries WHERE id=? AND subtitle_write_token=?').get(summaryId, token),
+    // 過期的 claim 不算持有：就算還沒被別人接管，也不可以拿去覆蓋這段期間別人寫進去的內容。
+    held: () => !released && !!db.prepare('SELECT 1 AS ok FROM summaries WHERE id=? AND subtitle_write_token=? AND subtitle_write_until > ?').get(summaryId, token, Date.now()),
     release: () => {
       if (released) return;
       released = true;

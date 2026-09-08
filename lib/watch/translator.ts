@@ -71,13 +71,22 @@ export function buildWatchTranslationMessages(input: TranslateWatchWindowInput):
 }
 
 /** Never mark untranslated or partially missing results as successful cache entries. */
+/**
+ * 哪些原文本來就翻不出中文：字庫保留詞、純數字與符號、全大寫縮寫（CPU、GPU）。
+ * 翻譯器與庫內／快取守門共用同一份判準，才不會一邊接受、一邊當成失敗。
+ */
+export function languageNeutralSource(original: string, glossary: Glossary): boolean {
+  const text = original.trim();
+  return glossary.no_translate_terms.some(term => term.toLowerCase() === text.toLowerCase())
+    || /^[\d\s\p{P}\p{S}]+$/u.test(text) || /^[A-Z][A-Z\d_-]{1,19}$/.test(text);
+}
+
 export function validateWatchTranslation(content: string, targets: WatchCue[], glossary: Glossary, options: { localTaiwan?: boolean } = {}): TranslatedCue[] {
   let result: unknown;
   try { result = JSON.parse(content); } catch { throw new WatchError('MODEL_FAILED', '翻譯服務未回傳有效的 JSON，沒有將原文誤存為翻譯。'); }
   if (!result || typeof result !== 'object' || Array.isArray(result) || Object.keys(result).join() !== 'cues') throw new WatchError('MODEL_FAILED', '翻譯回傳格式無效。');
   const values = (result as { cues?: unknown }).cues;
   if (!Array.isArray(values) || values.length !== targets.length) throw new WatchError('MODEL_FAILED', '翻譯片段數量不符，請重試這一批。');
-  const keepTerms = new Set(glossary.no_translate_terms.map((term) => term.toLowerCase()));
   return values.map((value: unknown, index: number) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new WatchError('MODEL_FAILED', '翻譯片段格式無效。');
     const item = value as { id?: unknown; text?: unknown };
@@ -87,7 +96,7 @@ export function validateWatchTranslation(content: string, targets: WatchCue[], g
     }
     const text = options.localTaiwan ? normalizeTaiwanSubtitle(item.text.trim(), glossary, toTaiwanTraditional) : toTaiwanTraditional(item.text.trim());
     const original = targets[index].text.trim();
-    const languageNeutral = keepTerms.has(original.toLowerCase()) || /^[\d\s\p{P}\p{S}]+$/u.test(original) || /^[A-Z][A-Z\d_-]{1,19}$/.test(original);
+    const languageNeutral = languageNeutralSource(original, glossary);
     if (!languageNeutral && !/[\u3400-\u9fff]/.test(text)) throw new WatchError('MODEL_FAILED', '翻譯未產生繁中字幕；不會把原文 fallback 當作成功結果。', 502, 'NOT_CHINESE');
     return { ...targets[index], text, originalText: targets[index].text };
   });
