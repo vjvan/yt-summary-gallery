@@ -31,6 +31,36 @@ import { recoverLocalLibraryJobs } from "./local-youtube-library";
 
 const RESUMABLE_STAGES = new Set(["transcribed", "translated", "summarized"]);
 
+/**
+ * 重啟時是否自動續跑舊摘要管線（翻譯／摘要／圖卡）。預設關閉：
+ * 續跑會呼叫翻譯與摘要模型，在雲端模式下等於開機就花錢，登入自啟必須是「只開服務、不自動生成」。
+ * 只有 YT_SUMMARY_AUTO_RESUME=1（或 true）才續跑；關閉時中斷的任務照樣標成可重試的 error，產物都留在列上。
+ */
+export function autoResumeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = (env.YT_SUMMARY_AUTO_RESUME || "").trim().toLowerCase();
+  return value === "1" || value === "true";
+}
+
+export interface ZombieRow { id: string; title: string | null; pipeline_stage: string | null }
+export interface ZombieRecoveryPlan {
+  resume: ZombieRow[];
+  fail: Array<ZombieRow & { reason: string }>;
+}
+
+export const RESUME_DISABLED_MESSAGE = "伺服器重啟時未自動續跑（預設關閉，避免開機就呼叫模型）；已完成的轉錄／翻譯都保留，請重新提交同一個連結或檔案，會從斷點接續。";
+const NOT_RESUMABLE_MESSAGE = "伺服器重啟導致任務中斷(轉錄尚未完成),請重新提交同一個檔案或連結即可重跑";
+
+/** 純函式：決定哪些中斷任務要續跑、哪些標成 error。關閉自動續跑時一律不續跑。 */
+export function planZombieRecovery(processing: ZombieRow[], autoResume: boolean): ZombieRecoveryPlan {
+  const plan: ZombieRecoveryPlan = { resume: [], fail: [] };
+  for (const row of processing) {
+    const resumable = RESUMABLE_STAGES.has(row.pipeline_stage || "");
+    if (resumable && autoResume) plan.resume.push(row);
+    else plan.fail.push({ ...row, reason: resumable ? RESUME_DISABLED_MESSAGE : NOT_RESUMABLE_MESSAGE });
+  }
+  return plan;
+}
+
 function parseSegments(json: string | null): TranscriptSegment[] {
   if (!json) return [];
   try {
@@ -161,22 +191,22 @@ export async function resumeSummaryPipeline(rowId: string): Promise<void> {
  * 開機殭屍任務回收。同步標記不可續跑的,可續跑的丟到背景依序跑
  * (register() 必須在 server 開始服務前完成,所以續跑不能 await)。
  */
-export function recoverZombieJobs(): void {
+export function recoverZombieJobs(options: { autoResume?: boolean } = {}): void {
   recoverLocalLibraryJobs();
   const db = getDb();
+  const autoResume = options.autoResume ?? autoResumeEnabled();
 
   const processing = db
     .prepare("SELECT id, title, pipeline_stage FROM summaries WHERE status = 'processing'")
-    .all() as Array<{ id: string; title: string | null; pipeline_stage: string | null }>;
+    .all() as ZombieRow[];
 
-  const toResume = processing.filter((r) => RESUMABLE_STAGES.has(r.pipeline_stage || ""));
-  const toFail = processing.filter((r) => !RESUMABLE_STAGES.has(r.pipeline_stage || ""));
+  const { resume: toResume, fail: toFail } = planZombieRecovery(processing, autoResume);
+  if (!autoResume && toFail.some((r) => RESUMABLE_STAGES.has(r.pipeline_stage || ""))) {
+    console.log(`[recover] 自動續跑已關閉（YT_SUMMARY_AUTO_RESUME 未設），${toFail.filter((r) => RESUMABLE_STAGES.has(r.pipeline_stage || "")).length} 筆可續跑的任務標為待重新提交。`);
+  }
 
   for (const r of toFail) {
-    db.prepare("UPDATE summaries SET status = 'error', error = ? WHERE id = ?").run(
-      "伺服器重啟導致任務中斷(轉錄尚未完成),請重新提交同一個檔案或連結即可重跑",
-      r.id
-    );
+    db.prepare("UPDATE summaries SET status = 'error', error = ? WHERE id = ?").run(r.reason, r.id);
   }
 
   const burnReset = db

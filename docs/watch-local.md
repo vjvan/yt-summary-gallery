@@ -93,6 +93,25 @@ v13 本機觀看頁與 0.5.0 擴充功能，在**取得原文、後端確認全�
 - 擴充仍顯示「10 批」：確認已重新載入擴充功能 **並重新整理 YouTube**，再測試連線。不要靠把雲端限制填成巨大數字代替本機切換。
 - 硬體／模型品質：字幕仍可能有術語、斷句或語意錯誤，可在術語表保留節點英文名稱；不保證逐句專業審校品質，也不是零延遲。
 
+## 登入自啟（2026-09-08）
+
+3000 本機服務（Next start、Ollama、3111 轉址）由 launchd 使用者代理程式 `com.vjvan.yt-summary-gallery` 管理：登入即啟動，程序非正常結束會在 15 秒內自動重啟（`KeepAlive.SuccessfulExit=false`）。管理指令都在 `scripts/launchd-3000.sh`：
+
+```sh
+scripts/launchd-3000.sh status      # launchd 狀態 + 3000/3111/11434 是否在聽
+scripts/launchd-3000.sh restart     # 部署新 build 後用（kickstart -k）
+scripts/launchd-3000.sh stop        # 停止並取消自啟（plist 保留）
+scripts/launchd-3000.sh install     # 重新寫 plist 並 bootstrap
+```
+
+log 在 `data/launchd-3000.log` 與 `data/launchd-3000.err.log`。plist 只設 `PATH`、`HOME`、`LANG`、`WATCH_PROCESSING_MODE=local`；`.env.local` 仍由 Next 從專案目錄讀。
+
+**只開服務，不自動生成**：`instrumentation.ts` 開機時的 `recoverZombieJobs()` 預設**不再續跑**中斷的舊摘要管線（翻譯／摘要／圖卡會呼叫模型），只把它們標成可重試的 error，已完成的轉錄與翻譯都留在資料列上；重新提交同一連結會從斷點接續。要恢復舊行為，在 plist 的 `EnvironmentVariables` 加 `YT_SUMMARY_AUTO_RESUME=1` 再 `restart`。影片庫字幕工作（本機）本來就不自動續跑。
+
+已驗證：bootstrap 後 3 秒回 200；`kill -9` next-server 後 3 秒由 launchd 拉起新程序；`kickstart -k` 2 秒內回 200。**真正的重開機／登入尚未實測**，下次登入請跑一次 `status` 確認。
+
+部署流程改為：備份 `data/summaries.db` → 確認沒有 processing／burning／持鎖列 → `npm run build`（build 期間服務仍在跑舊版，`.next` 會被覆寫；要保守就先 `stop`）→ `scripts/launchd-3000.sh restart`。
+
 ## 進階設定（皆為伺服器設定，不放到擴充功能）
 
 - `WATCH_LOCAL_MODELS_DIR`：模型根目錄。
