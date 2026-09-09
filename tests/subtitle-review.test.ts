@@ -393,3 +393,29 @@ test('re-running a chosen window calls the model again, and candidates from an o
     assert.equal(service.get('vid').candidates.find(item => item.cueIndex === 1)?.decision, 'applied', 'same text keeps the applied decision');
   } finally { db.close(); }
 });
+
+test('a video with no translation yet can take an external one as its first, and only once', async () => {
+  const { db, service } = serviceFixture(fakeRequest({}), { zh: [] });
+  db.prepare('UPDATE summaries SET segments_zh=NULL, transcript_zh=NULL, is_translated=0 WHERE id=?').run('vid');
+  try {
+    const view = service.get('vid');
+    assert.equal(view.counts.windows > 0, true, 'an untranslated video can still be prepared');
+    assert.deepEqual(view.candidates, []);
+    const sourceHash = view.sourceHash!;
+    const store = new SubtitleReviewStore(db);
+    const started = store.start('vid', sourceHash, 'external:test', 'v', 1);
+    const cues = JSON.parse((db.prepare('SELECT segments FROM summaries WHERE id=?').get('vid') as { segments: string }).segments) as Array<{ start: number; end: number; text: string }>;
+    store.saveCandidates('vid', started.token!, sourceHash, 'external:test', cues.map((cue, index) => ({
+      cueIndex: index, cueId: `cue-${index}`, windowKey: 'w-0-0', start: cue.start, end: cue.end, source: cue.text, current: null,
+      candidate: `外部第${index}句`, flags: [], changed: true, notes: [], decision: 'candidate' as const,
+    })), 'v');
+    store.decide('vid', sourceHash, cues.map((_, index) => index), 'approved');
+    const applied = service.apply('vid', sourceHash);
+    assert.equal(applied.applied, cues.length, 'every line lands');
+    const row = db.prepare('SELECT segments_zh, is_translated FROM summaries WHERE id=?').get('vid') as { segments_zh: string; is_translated: number };
+    assert.equal(row.is_translated, 1, 'the video is now translated');
+    assert.deepEqual(JSON.parse(row.segments_zh).map((cue: { text: string }) => cue.text), cues.map((_, index) => `外部第${index}句`));
+    // 第二次套用同一批：內容已經一樣，不再重寫，也不會把別人寫進去的東西蓋掉。
+    assert.equal(service.apply('vid', sourceHash).applied, 0);
+  } finally { db.close(); }
+});

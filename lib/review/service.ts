@@ -48,7 +48,9 @@ const validSegment = (cue: unknown): cue is Segment => !!cue && typeof cue === '
 
 export const reviewSourceHash = (segments: Segment[], transcriptSource: string | null) => hashValue([SUBTITLE_REVIEW_VERSION.split('-').slice(0, 2).join('-'), segments.map(cue => [cue.start, cue.end, cue.text]), transcriptSource || '']);
 
-interface Prepared { cues: ReviewCue[]; segments: Segment[]; segmentsZh: Segment[]; windows: ReviewWindow[]; sourceHash: string }
+interface Prepared { cues: ReviewCue[]; segments: Segment[]; segmentsZh: Segment[]; windows: ReviewWindow[]; sourceHash: string;
+  /** 這支影片還沒有任何中譯（例如本機逐句翻到一半失敗，整份中譯從未寫入）。 */
+  untranslated: boolean }
 
 export class SubtitleReviewService {
   private tasks = new Map<string, { controller: AbortController; completion: Promise<void> }>();
@@ -65,10 +67,16 @@ export class SubtitleReviewService {
     const segments = parseSegments(row.segments);
     if (!segments || !segments.length || !segments.every(validSegment)) throw new ReviewInputError('這部影片沒有可用的原文逐字稿，無法校訂。', 422);
     const zh = row.is_translated ? parseSegments(row.segments_zh) : null;
-    if (!zh || zh.length !== segments.length || !zh.every(validSegment)) throw new ReviewInputError('中譯尚未完成或與原文句數不一致；請先完成字幕再校訂。', 422);
-    if (zh.some((cue, index) => cue.start !== segments[index].start || cue.end !== segments[index].end)) throw new ReviewInputError('中譯時間軸與原文不一致，請先重新產生字幕再校訂。', 422);
-    const cues = toReviewCues(segments, zh);
-    return { cues, segments, segmentsZh: zh, windows: buildReviewWindows(cues), sourceHash: reviewSourceHash(segments, row.transcript_source) };
+    // 完全沒有中譯是合法起點：外部譯文可以直接當第一份中譯寫進來（現行譯文一律視為空）。
+    // 有中譯但句數或時間軸對不上就一定要擋，那是資料不一致，不是「還沒翻」。
+    const untranslated = !row.is_translated && !row.segments_zh;
+    if (!untranslated) {
+      if (!zh || zh.length !== segments.length || !zh.every(validSegment)) throw new ReviewInputError('中譯尚未完成或與原文句數不一致；請先完成字幕再校訂。', 422);
+      if (zh.some((cue, index) => cue.start !== segments[index].start || cue.end !== segments[index].end)) throw new ReviewInputError('中譯時間軸與原文不一致，請先重新產生字幕再校訂。', 422);
+    }
+    const segmentsZh = zh ?? segments.map(segment => ({ ...segment, text: '' }));
+    const cues = toReviewCues(segments, untranslated ? null : segmentsZh);
+    return { cues, segments, segmentsZh, windows: buildReviewWindows(cues), sourceHash: reviewSourceHash(segments, row.transcript_source), untranslated };
   }
 
   private writeBlock(row: ReviewSourceRow): string | null {
@@ -187,9 +195,10 @@ export class SubtitleReviewService {
     const prepared = this.prepare(row);
     if (sourceHash !== prepared.sourceHash) throw new ReviewInputError('原文字幕已變更，請重新校訂後再套用。', 409);
     const written = this.applyWithinTransaction(row, prepared, sourceHash, only);
-    if (!written) return { applied: 0, batchId: null, exportError: null, response: this.get(id) };
+    if (!written) { this.syncSubtitleStatus(row); return { applied: 0, batchId: null, exportError: null, response: this.get(id) }; }
     const exportError = this.exportSubtitleFiles(row, prepared.segments, written.nextZh);
     if (exportError) this.deps.store.setExportError(row.id, exportError);
+    this.syncSubtitleStatus(row);
     return { applied: written.items, batchId: written.batchId, exportError, response: this.get(id) };
   }
 
@@ -205,6 +214,7 @@ export class SubtitleReviewService {
       const fresh = this.freshRow(row.id);
       if (fresh.segments !== row.segments) throw new ReviewInputError('原文字幕在套用前被其他工作更動，未寫入任何句子；請重新整理。', 409);
       if (fresh.segments_zh !== row.segments_zh) throw new ReviewInputError('中譯在套用前被其他工作更動，未寫入任何句子；請重新整理後再套用。', 409);
+      if (prepared.untranslated && (fresh.is_translated ? 1 : 0) !== (row.is_translated ? 1 : 0)) throw new ReviewInputError('中譯在套用前被其他工作寫入，未寫入任何句子；請重新整理後再套用。', 409);
       const freshBlock = this.writeBlock(fresh);
       if (freshBlock) throw new ReviewInputError(freshBlock, 409);
       const nextZh = prepared.segmentsZh.map(cue => ({ ...cue }));
@@ -221,8 +231,12 @@ export class SubtitleReviewService {
       }
       if (identical.length) this.deps.store.markApplied(row.id, sourceHash, identical);
       if (!items.length) return;
-      const updated = this.deps.db.prepare('UPDATE summaries SET segments_zh=?, transcript_zh=? WHERE id=? AND segments_zh=?')
-        .run(JSON.stringify(nextZh), nextZh.map(cue => cue.text).join(' '), row.id, row.segments_zh);
+      // 第一份中譯：CAS 對「還是空的」，並把影片標成已翻譯。
+      const updated = prepared.untranslated
+        ? this.deps.db.prepare('UPDATE summaries SET segments_zh=?, transcript_zh=?, is_translated=1 WHERE id=? AND segments_zh IS NULL')
+          .run(JSON.stringify(nextZh), nextZh.map(cue => cue.text).join(' '), row.id)
+        : this.deps.db.prepare('UPDATE summaries SET segments_zh=?, transcript_zh=? WHERE id=? AND segments_zh=?')
+          .run(JSON.stringify(nextZh), nextZh.map(cue => cue.text).join(' '), row.id, row.segments_zh);
       if (updated.changes !== 1) throw new ReviewInputError('中譯在套用時被其他工作更動，未寫入任何句子；請重新整理後再套用。', 409);
       this.deps.store.recordApplied(row.id, sourceHash, batchId, items, appliedAt);
       this.deps.store.setExportError(row.id, null);
@@ -306,8 +320,22 @@ export class SubtitleReviewService {
    * 只有已經有中譯字幕檔的影片才重寫；失敗回傳說明，不吞。
    * 寫檔前再從資料庫讀一次最新中譯：匯出永遠反映資料庫當下，不用呼叫端可能已過時的快照。
    */
+  /**
+   * 影片庫的字幕工作可能因為少數句子失敗而停在 partial；整份中譯齊了之後狀態要跟著更新，
+   * 否則畫面會一直說字幕未完成、也不給完整字幕下載。以資料庫當下的內容判斷，不依賴這次寫了幾句。
+   */
+  private syncSubtitleStatus(row: ReviewSourceRow): void {
+    const latest = this.deps.db.prepare('SELECT segments, segments_zh FROM summaries WHERE id=?').get(row.id) as { segments: string | null; segments_zh: string | null } | undefined;
+    const segments = latest ? parseSegments(latest.segments) : null;
+    const zh = latest ? parseSegments(latest.segments_zh) : null;
+    if (!segments || !zh || segments.length !== zh.length || !zh.every(cue => cue.text.trim())) return;
+    this.deps.db.prepare("UPDATE summaries SET subtitle_status='complete' WHERE id=? AND subtitle_status='partial'").run(row.id);
+    // 進度與錯誤欄位只有跑過影片庫字幕工作的資料庫才有；沒有就不必清，主要狀態上面已經更新。
+    try { this.deps.db.prepare("UPDATE summaries SET subtitle_completed=?, subtitle_error=NULL WHERE id=? AND subtitle_status='complete'").run(zh.length, row.id); }
+    catch { /* 這個資料庫沒有那兩個欄位 */ }
+  }
+
   private exportSubtitleFiles(row: ReviewSourceRow, segments: Segment[], segmentsZh: Segment[]): string | null {
-    if (!row.srt_zh_path) return null;
     const root = this.deps.projectRoot ?? process.cwd();
     const outputDir = path.join(root, 'public', 'burned', row.video_id);
     try {
@@ -315,8 +343,19 @@ export class SubtitleReviewService {
       const latestSegments = latest ? parseSegments(latest.segments) : null;
       const latestZh = latest ? parseSegments(latest.segments_zh) : null;
       const useLatest = latestSegments && latestZh && latestSegments.length === latestZh.length && latestSegments.every(validSegment) && latestZh.every(validSegment);
+      const finalSegments = useLatest ? latestSegments : segments;
+      const finalZh = useLatest ? latestZh : segmentsZh;
+      // 這支影片先前沒有中文字幕檔（例如本機逐句翻到一半失敗，整份中譯從未寫入）：
+      // 現在整份中譯齊了才第一次寫出並登記路徑；還沒齊就不要寫半套檔案。
+      const complete = finalSegments.length === finalZh.length && finalZh.every(cue => cue.text.trim());
+      if (!row.srt_zh_path && !complete) return null;
       fs.mkdirSync(outputDir, { recursive: true });
-      writeSubtitleFiles({ segments: useLatest ? latestSegments : segments, segmentsZh: useLatest ? latestZh : segmentsZh, wasTranslated: true, outputDir, contentId: row.video_id });
+      const written = writeSubtitleFiles({ segments: finalSegments, segmentsZh: finalZh, wasTranslated: true, outputDir, contentId: row.video_id });
+      if (!row.srt_zh_path) {
+        const publicPath = (file: string | null) => file ? '/' + path.relative(path.join(root, 'public'), file).split(path.sep).join('/') : null;
+        this.deps.db.prepare('UPDATE summaries SET srt_en_path=COALESCE(srt_en_path,?), srt_zh_path=?, srt_bi_path=? WHERE id=?')
+          .run(publicPath(written.srtEnPath), publicPath(written.srtZhPath), publicPath(written.srtBiPath), row.id);
+      }
       return null;
     } catch (error) {
       return `字幕檔（SRT／VTT）重寫失敗：${error instanceof Error ? error.message : '未知錯誤'}。資料庫已更新，請按「重新匯出字幕檔」重試。`;
